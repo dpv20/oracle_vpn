@@ -1,0 +1,72 @@
+import json
+import os
+import sys
+import winreg
+
+APPDATA = os.getenv("APPDATA", os.path.expanduser("~"))
+CONFIG_DIR = os.path.join(APPDATA, "VPNSwitcher")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+STARTUP_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+APP_NAME = "VPNSwitcher"
+
+DEFAULTS = {
+    "cisco_cli_path": "",
+    "cisco_host": "",
+    "cisco_username": "",
+    "cisco_password": "",
+    "forti_exe_path": "",
+    "forti_connect_cmd": "",
+    "forti_disconnect_cmd": "",
+    "start_with_windows": True,
+}
+
+
+class ConfigManager:
+    def __init__(self):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+
+    def load(self) -> dict:
+        if not os.path.exists(CONFIG_FILE):
+            self.save(DEFAULTS.copy())
+            return DEFAULTS.copy()
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            # Fill in any missing keys from defaults
+            for k, v in DEFAULTS.items():
+                data.setdefault(k, v)
+            return data
+        except Exception:
+            return DEFAULTS.copy()
+
+    def save(self, config: dict):
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+        self._apply_startup(config.get("start_with_windows", True))
+
+    def is_configured(self) -> bool:
+        """Returns True if the user has set at least the Cisco host or FortiClient path."""
+        cfg = self.load()
+        return bool(cfg.get("cisco_host") or cfg.get("forti_exe_path") or cfg.get("forti_connect_cmd"))
+
+    def _get_exe_path(self) -> str:
+        """Return the path to this application's executable."""
+        if getattr(sys, "frozen", False):
+            return sys.executable
+        return os.path.abspath(sys.argv[0])
+
+    def _apply_startup(self, enabled: bool):
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, STARTUP_KEY, 0, winreg.KEY_SET_VALUE
+            )
+            if enabled:
+                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, f'"{self._get_exe_path()}"')
+            else:
+                try:
+                    winreg.DeleteValue(key, APP_NAME)
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(key)
+        except Exception:
+            pass

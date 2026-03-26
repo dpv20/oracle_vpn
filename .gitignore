@@ -1,0 +1,26 @@
+# PyInstaller output
+build/
+dist/
+*.spec
+
+# Inno Setup output
+Output/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# User config (each user has their own in %APPDATA%)
+config.json
