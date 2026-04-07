@@ -123,8 +123,9 @@ class SettingsDialog(tk.Toplevel):
         self.cfg = config_manager.load()
 
         self.title("VPN Switcher — Settings")
-        self.geometry("480x560")
-        self.resizable(False, False)
+        self.geometry("500x600")
+        self.minsize(420, 500)
+        self.resizable(True, True)
         self.configure(bg=BG)
         self.transient(parent)
         self.grab_set()
@@ -163,6 +164,28 @@ class SettingsDialog(tk.Toplevel):
         sep.pack(fill=tk.X, pady=(0, 4))
 
     def _build(self):
+        # ── button bar must be packed FIRST so it anchors to the bottom ──────
+        btn_frame = tk.Frame(self, bg=BG, pady=12, padx=20)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        tk.Button(
+            btn_frame, text="Cancel",
+            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
+            font=("Segoe UI", 10), padx=16, pady=6,
+            command=self.destroy, cursor="hand2"
+        ).pack(side=tk.RIGHT, padx=(6, 0))
+
+        tk.Button(
+            btn_frame, text="  Save  ",
+            bg=C_CISCO, fg=WHITE, relief=tk.FLAT,
+            font=("Segoe UI", 10, "bold"), padx=16, pady=6,
+            command=self._save, cursor="hand2"
+        ).pack(side=tk.RIGHT)
+
+        # thin separator above buttons
+        tk.Frame(self, bg=BORDER, height=1).pack(side=tk.BOTTOM, fill=tk.X)
+
+        # ── scrollable content area ────────────────────────────────────────────
         canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
         sb = tk.Scrollbar(self, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
@@ -200,7 +223,24 @@ class SettingsDialog(tk.Toplevel):
         # ── FortiClient ────────────────────────────────────────────────────────
         self._section(frame, "FortiClient VPN")
 
-        self._label(frame, "FortiClientVPN.exe path (leave blank to auto-detect)")
+        self._label(frame, "Sign-in email (auto-filled in the login popup)")
+        self._v_forti_user = self._entry(frame, "forti_username")
+
+        self._label(frame, "Sign-in password (encrypted with Windows DPAPI)")
+        # Decrypt stored password for display
+        from config_manager import decrypt_password
+        decrypted = decrypt_password(self.cfg.get("forti_password_enc", ""))
+        self._v_forti_pass = tk.StringVar(value=decrypted)
+        e = tk.Entry(
+            frame, textvariable=self._v_forti_pass, show="●",
+            bg=SURFACE, fg=TEXT, insertbackground=TEXT,
+            relief=tk.FLAT, font=("Segoe UI", 10),
+            highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=C_CISCO
+        )
+        e.pack(fill=tk.X, ipady=5)
+
+        self._label(frame, "FortiClient.exe path (leave blank to auto-detect)")
         self._v_forti_exe = self._entry(frame, "forti_exe_path")
 
         self._label(frame, "Custom connect command (optional — overrides launching the app)")
@@ -222,25 +262,10 @@ class SettingsDialog(tk.Toplevel):
         )
         chk.pack(anchor="w", pady=6)
 
-        # ── buttons ────────────────────────────────────────────────────────────
-        btn_frame = tk.Frame(self, bg=BG, pady=12, padx=20)
-        btn_frame.pack(fill=tk.X, side=tk.BOTTOM)
-
-        tk.Button(
-            btn_frame, text="Cancel",
-            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
-            font=("Segoe UI", 10), padx=16, pady=6,
-            command=self.destroy, cursor="hand2"
-        ).pack(side=tk.RIGHT, padx=(6, 0))
-
-        tk.Button(
-            btn_frame, text="Save",
-            bg=C_CISCO, fg=WHITE, relief=tk.FLAT,
-            font=("Segoe UI", 10, "bold"), padx=16, pady=6,
-            command=self._save, cursor="hand2"
-        ).pack(side=tk.RIGHT)
 
     def _save(self):
+        from config_manager import encrypt_password
+        forti_pass_plain = self._v_forti_pass.get()
         self.cfg.update({
             "cisco_host": self._v_cisco_host.get().strip(),
             "cisco_username": self._v_cisco_user.get().strip(),
@@ -249,6 +274,8 @@ class SettingsDialog(tk.Toplevel):
             "forti_exe_path": self._v_forti_exe.get().strip(),
             "forti_connect_cmd": self._v_forti_conn.get().strip(),
             "forti_disconnect_cmd": self._v_forti_disc.get().strip(),
+            "forti_username": self._v_forti_user.get().strip(),
+            "forti_password_enc": encrypt_password(forti_pass_plain) if forti_pass_plain else "",
             "start_with_windows": self._v_startup.get(),
         })
         self.config_manager.save(self.cfg)
@@ -279,12 +306,10 @@ class VPNSwitcherApp:
     def _build_window(self):
         root = self.root
         root.title("VPN Switcher")
-        root.geometry("330x400")
-        root.resizable(False, False)
+        root.resizable(True, True)
         root.configure(bg=BG)
         root.protocol("WM_DELETE_WINDOW", self._hide)
 
-        # Try to set window icon
         try:
             ico = _make_tray_icon(NONE)
             from PIL import ImageTk
@@ -293,31 +318,38 @@ class VPNSwitcherApp:
         except Exception:
             pass
 
+        # Use grid so every row is explicitly placed — no side=BOTTOM surprises
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=0)  # header
+        root.rowconfigure(1, weight=0)  # status card
+        root.rowconfigure(2, weight=0)  # buttons
+        root.rowconfigure(3, weight=1)  # spacer
+        root.rowconfigure(4, weight=0)  # message
+        root.rowconfigure(5, weight=0)  # settings bar
+
         # ── header ────────────────────────────────────────────────────────────
-        hdr = tk.Frame(root, bg=BG, pady=18)
-        hdr.pack(fill=tk.X)
+        hdr = tk.Frame(root, bg=BG, pady=14)
+        hdr.grid(row=0, column=0, sticky="ew")
         tk.Label(hdr, text="VPN Switcher", bg=BG, fg=TEXT,
                  font=("Segoe UI", 16, "bold")).pack()
 
         # ── status card ───────────────────────────────────────────────────────
-        card = tk.Frame(root, bg=SURFACE, pady=14, padx=20,
+        card = tk.Frame(root, bg=SURFACE, pady=12, padx=20,
                         highlightthickness=1, highlightbackground=BORDER)
-        card.pack(fill=tk.X, padx=20, pady=(0, 18))
+        card.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 14))
 
         tk.Label(card, text="CURRENT STATUS", bg=SURFACE, fg=MUTED,
                  font=("Segoe UI", 7, "bold")).pack()
-
         self._dot = tk.Label(card, text="●", bg=SURFACE, fg=C_NONE,
-                             font=("Segoe UI", 18))
+                             font=("Segoe UI", 16))
         self._dot.pack(pady=(2, 0))
-
         self._status_lbl = tk.Label(card, text="Checking…", bg=SURFACE, fg=TEXT,
                                     font=("Segoe UI", 11, "bold"))
         self._status_lbl.pack()
 
         # ── VPN buttons ───────────────────────────────────────────────────────
         btn_area = tk.Frame(root, bg=BG)
-        btn_area.pack(fill=tk.X, padx=20)
+        btn_area.grid(row=2, column=0, sticky="ew", padx=20)
 
         self._btn_cisco = VPNButton(
             btn_area, "Cisco Secure Client", C_CISCO, C_CISCO_HOVER,
@@ -337,14 +369,17 @@ class VPNSwitcherApp:
         )
         self._btn_none.pack(fill=tk.X, pady=4)
 
+        # ── spacer ────────────────────────────────────────────────────────────
+        tk.Frame(root, bg=BG).grid(row=3, column=0)
+
         # ── message area ──────────────────────────────────────────────────────
         self._msg_lbl = tk.Label(root, text="", bg=BG, fg=MUTED,
                                  font=("Segoe UI", 8), wraplength=290)
-        self._msg_lbl.pack(pady=(6, 0), padx=20)
+        self._msg_lbl.grid(row=4, column=0, pady=(6, 0), padx=20)
 
-        # ── bottom bar ────────────────────────────────────────────────────────
+        # ── settings bar ──────────────────────────────────────────────────────
         bottom = tk.Frame(root, bg=BG, pady=10, padx=20)
-        bottom.pack(fill=tk.X, side=tk.BOTTOM)
+        bottom.grid(row=5, column=0, sticky="ew")
         tk.Button(
             bottom, text="⚙  Settings",
             bg=SURFACE, fg=MUTED, relief=tk.FLAT,
@@ -353,12 +388,16 @@ class VPNSwitcherApp:
         ).pack(side=tk.RIGHT)
 
     def _center_window(self):
+        # Let tkinter measure the real required size after all widgets are built
         self.root.update_idletasks()
+        w = max(self.root.winfo_reqwidth(), 340)
+        h = self.root.winfo_reqheight()
+        self.root.minsize(w, h)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        x = (sw - 330) // 2
-        y = (sh - 400) // 2
-        self.root.geometry(f"330x400+{x}+{y}")
+        x = (sw - w) // 2
+        y = (sh - h) // 2
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
 
     # ── tray ───────────────────────────────────────────────────────────────────
 
@@ -432,6 +471,8 @@ class VPNSwitcherApp:
         current = self._status
 
         def _work():
+            import vpn_controller as _vc
+            _vc._autofill_cancel.clear()
             self._set_busy(True)
             try:
                 # Disconnect the other VPN first
@@ -460,6 +501,10 @@ class VPNSwitcherApp:
                 elif target == FORTI:
                     self._msg("Connecting to FortiClient VPN…")
                     ok, msg = self.controller.connect_forti()
+                    if msg == "__WRONG_PASSWORD__":
+                        self._msg("⚠  Contraseña incorrecta — actualízala en Settings.")
+                        self.root.after(0, lambda: self._handle_wrong_password(target))
+                        return
                 else:
                     ok, msg = True, "Disconnected."
 
@@ -525,6 +570,79 @@ class VPNSwitcherApp:
         # Reload config after settings saved
         self.config = self.config_manager.load()
         self.controller.config = self.config
+
+    def _handle_wrong_password(self, target: str):
+        """Called on the main thread when FortiClient reports wrong credentials.
+        Shows a warning, opens Settings, then retries — or cancels if user dismisses."""
+        import vpn_controller as _vc
+        self._set_busy(False)
+
+        # Bring main window to front
+        self.root.deiconify()
+        self.root.lift()
+        self.root.attributes("-topmost", True)
+        self.root.focus_force()
+        self.root.update()
+        self.root.attributes("-topmost", False)
+
+        answer = messagebox.askokcancel(
+            "Credenciales incorrectas",
+            "El usuario o contraseña guardados para FortiClient fueron rechazados.\n\n"
+            "¿Deseas actualizar las credenciales en Settings y reintentar?",
+            parent=self.root
+        )
+        if not answer:
+            # User cancelled — stop autofill
+            _vc._autofill_cancel.set()
+            self._msg("Autofill cancelado.")
+            return
+
+        # Open settings
+        dlg = SettingsDialog(self.root, self.config_manager)
+        self.root.wait_window(dlg)
+
+        # Reload config with updated credentials
+        self.config = self.config_manager.load()
+        self.controller.config = self.config
+
+        # Small delay so Settings window fully disappears before we steal focus
+        self.root.after(300, lambda: self._start_retry(target))
+
+    def _start_retry(self, target: str):
+        """Start the password retry thread (called after Settings dialog closes)."""
+        import vpn_controller as _vc
+        _vc._autofill_cancel.clear()
+
+        # Hide the main window so it doesn't compete for focus with the sign-in window
+        self.root.withdraw()
+
+        def _retry():
+            self._set_busy(True)
+            try:
+                self._msg("Reintentando con nueva contraseña…")
+                ok, msg = self.controller.retry_forti_credentials()
+                if msg == "__WRONG_PASSWORD__":
+                    self._msg("⚠  Contraseña incorrecta — actualízala en Settings.")
+                    self.root.after(0, self.root.deiconify)
+                    self.root.after(0, lambda: self._handle_wrong_password(target))
+                    return
+                # Password sent — stay hidden while user completes MFA
+                self._msg(msg)
+                # Poll until VPN connects or timeout (90s for MFA approval)
+                deadline = time.time() + 90
+                while time.time() < deadline:
+                    time.sleep(3)
+                    new_status = self.controller.get_status()
+                    if new_status != self._status:
+                        self._status = new_status
+                        self.root.after(0, self._refresh_ui)
+                        self._update_tray_icon()
+                        break
+            finally:
+                self._set_busy(False)
+                self.root.after(0, self.root.deiconify)
+
+        threading.Thread(target=_retry, daemon=True).start()
 
     # ── helpers ────────────────────────────────────────────────────────────────
 

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import sys
@@ -17,8 +18,37 @@ DEFAULTS = {
     "forti_exe_path": "",
     "forti_connect_cmd": "",
     "forti_disconnect_cmd": "",
+    "forti_username": "",
+    "forti_password_enc": "",
     "start_with_windows": True,
 }
+
+
+def encrypt_password(plain: str) -> str:
+    """Encrypt using Windows DPAPI — only this Windows user can decrypt."""
+    if not plain:
+        return ""
+    try:
+        import win32crypt
+        blob = win32crypt.CryptProtectData(
+            plain.encode("utf-8"), "VPNSwitcher", None, None, None, 0
+        )
+        return base64.b64encode(blob).decode("ascii")
+    except Exception:
+        return ""
+
+
+def decrypt_password(enc: str) -> str:
+    """Decrypt a DPAPI-encrypted password."""
+    if not enc:
+        return ""
+    try:
+        import win32crypt
+        blob = base64.b64decode(enc.encode("ascii"))
+        _, data = win32crypt.CryptUnprotectData(blob, None, None, None, 0)
+        return data.decode("utf-8")
+    except Exception:
+        return ""
 
 
 class ConfigManager:

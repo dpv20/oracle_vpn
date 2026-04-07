@@ -9,6 +9,15 @@ import sys
 sys.path.insert(0, os.path.dirname(__file__))
 
 
+def _set_dpi_aware():
+    """Tell Windows not to scale this app — lets tkinter control its own size."""
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
+
 def _single_instance_guard():
     """Use a named mutex to prevent multiple instances on Windows."""
     try:
@@ -26,6 +35,7 @@ def _single_instance_guard():
 
 
 def main():
+    _set_dpi_aware()
     _single_instance_guard()
 
     from ui import VPNSwitcherApp
