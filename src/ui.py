@@ -22,40 +22,57 @@ TEXT = "#e0e0f0"
 MUTED = "#7878a0"
 WHITE = "#ffffff"
 
-C_CISCO = "#0078d4"
-C_FORTI = "#e84545"
+C_CISCO = "#b71c1c"       # Oracle red
+C_FORTI = "#2e7d32"       # Falabella green
 C_NONE = "#555577"
 C_SUCCESS = "#4ade80"
 C_WARN = "#facc15"
 C_ERROR = "#f87171"
 
-C_CISCO_HOVER = "#1a8fe0"
-C_FORTI_HOVER = "#f05555"
+C_CISCO_HOVER = "#c62828"
+C_FORTI_HOVER = "#388e3c"
 C_NONE_HOVER = "#666688"
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+def _load_logo(variant: str = "") -> Image.Image:
+    """Load a logo PNG and remove white border pixels.
+    variant: '' = logo_cuadrado.png, 'rojo' = logo_cuadrado_rojo.png, 'verde' = logo_cuadrado_verde.png
+    """
+    import os
+    base = os.path.dirname(os.path.dirname(__file__))
+    name = f"logo_cuadrado_{variant}.png" if variant else "logo_cuadrado.png"
+    logo_path = os.path.join(base, name)
+    img = Image.open(logo_path).convert("RGBA")
+    data = img.getdata()
+    new_data = [
+        (r, g, b, 0) if (r > 235 and g > 235 and b > 235) else (r, g, b, a)
+        for r, g, b, a in data
+    ]
+    img.putdata(new_data)
+    bbox = img.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    return img
+
+
 def _make_tray_icon(state: str) -> Image.Image:
+    """Lock icon for the system tray. Grey = no VPN, red = Oracle/Cisco, green = Falabella/Forti."""
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
     if state == CISCO:
-        bg = (0, 120, 212, 255)
+        bg = (183, 28, 28, 255)    # Oracle red
     elif state == FORTI:
-        bg = (232, 69, 69, 255)
+        bg = (46, 125, 50, 255)    # Falabella green
     else:
-        bg = (80, 80, 110, 255)
+        bg = (80, 80, 110, 255)    # grey
 
-    # Rounded square background
     d.rounded_rectangle([0, 0, size - 1, size - 1], radius=14, fill=bg)
-
-    # Lock body
     d.rounded_rectangle([20, 32, 44, 52], radius=4, fill=(255, 255, 255, 230))
-    # Lock shackle
     d.arc([18, 14, 46, 40], start=0, end=180, fill=(255, 255, 255, 230), width=5)
-    # Keyhole dot
     d.ellipse([29, 38, 35, 44], fill=bg)
 
     return img
@@ -311,9 +328,16 @@ class VPNSwitcherApp:
         root.protocol("WM_DELETE_WINDOW", self._hide)
 
         try:
-            ico = _make_tray_icon(NONE)
             from PIL import ImageTk
-            self._tk_icon = ImageTk.PhotoImage(ico)
+            import tempfile, os
+            logo = _load_logo()
+            # Save as .ico for Windows taskbar (iconbitmap is more reliable than iconphoto)
+            ico_path = os.path.join(tempfile.gettempdir(), "vpnswitcher.ico")
+            logo.save(ico_path, format="ICO", sizes=[(256,256),(48,48),(32,32),(16,16)])
+            root.iconbitmap(ico_path)
+            # Also set iconphoto for the title bar
+            logo32 = logo.resize((32, 32), Image.LANCZOS)
+            self._tk_icon = ImageTk.PhotoImage(logo32)
             root.iconphoto(True, self._tk_icon)
         except Exception:
             pass
@@ -352,13 +376,13 @@ class VPNSwitcherApp:
         btn_area.grid(row=2, column=0, sticky="ew", padx=20)
 
         self._btn_cisco = VPNButton(
-            btn_area, "Cisco Secure Client", C_CISCO, C_CISCO_HOVER,
+            btn_area, "Oracle VPN (Cisco Secure Client)", C_CISCO, C_CISCO_HOVER,
             lambda: self._switch(CISCO)
         )
         self._btn_cisco.pack(fill=tk.X, pady=4)
 
         self._btn_forti = VPNButton(
-            btn_area, "FortiClient VPN", C_FORTI, C_FORTI_HOVER,
+            btn_area, "Falabella VPN (FortiClient)", C_FORTI, C_FORTI_HOVER,
             lambda: self._switch(FORTI)
         )
         self._btn_forti.pack(fill=tk.X, pady=4)
@@ -386,12 +410,18 @@ class VPNSwitcherApp:
             font=("Segoe UI", 9), pady=4, padx=10,
             command=self._open_settings, cursor="hand2"
         ).pack(side=tk.RIGHT)
+        tk.Button(
+            bottom, text="For Oracle  |  by Diego Pavez Verdi",
+            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
+            font=("Segoe UI", 9), pady=4, padx=10,
+            command=self._open_about, cursor="hand2"
+        ).pack(side=tk.LEFT)
 
     def _center_window(self):
         # Let tkinter measure the real required size after all widgets are built
         self.root.update_idletasks()
-        w = max(self.root.winfo_reqwidth(), 340)
-        h = self.root.winfo_reqheight()
+        w = int(max(self.root.winfo_reqwidth(), 340) * 1.10)
+        h = int(self.root.winfo_reqheight() * 1.10)
         self.root.minsize(w, h)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -399,14 +429,60 @@ class VPNSwitcherApp:
         y = (sh - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
 
+    def _open_about(self, *_):
+        self.root.after(0, self.__open_about)
+
+    def __open_about(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("About")
+        dlg.configure(bg=BG)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        pad = dict(bg=BG)
+        tk.Label(dlg, text="Diego Pavez Verdi", bg=BG, fg=TEXT,
+                 font=("Segoe UI", 11, "bold")).pack(pady=(20, 2), padx=24)
+        tk.Label(dlg, text="IT Consultant", bg=BG, fg=MUTED,
+                 font=("Segoe UI", 9)).pack(pady=(0, 10), padx=24)
+
+        sep = tk.Frame(dlg, bg=BORDER, height=1)
+        sep.pack(fill=tk.X, padx=20)
+
+        links = [
+            ("GitHub",          "https://github.com/dpv20"),
+            ("Oracle mail",     "diego.pavez@oracle.com"),
+            ("Personal mail",   "diego.pav3z@gmail.com"),
+        ]
+        for label, value in links:
+            row = tk.Frame(dlg, bg=BG)
+            row.pack(fill=tk.X, padx=24, pady=3)
+            tk.Label(row, text=f"{label}:", bg=BG, fg=MUTED,
+                     font=("Segoe UI", 8), width=12, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=value, bg=BG, fg=TEXT,
+                     font=("Segoe UI", 8), anchor="w").pack(side=tk.LEFT)
+
+        tk.Button(dlg, text="Close", bg=SURFACE, fg=MUTED, relief=tk.FLAT,
+                  font=("Segoe UI", 9), padx=16, pady=5,
+                  command=dlg.destroy, cursor="hand2").pack(pady=(14, 18))
+
+        dlg.update_idletasks()
+        pw = self.root.winfo_rootx()
+        ph = self.root.winfo_rooty()
+        dw = dlg.winfo_reqwidth()
+        dh = dlg.winfo_reqheight()
+        x = pw + (self.root.winfo_width() - dw) // 2
+        y = ph + (self.root.winfo_height() - dh) // 2
+        dlg.geometry(f"+{x}+{y}")
+
     # ── tray ───────────────────────────────────────────────────────────────────
 
     def _build_tray(self):
         menu = pystray.Menu(
             pystray.MenuItem("Open", self._show, default=True),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Cisco Secure Client", lambda: self._switch(CISCO)),
-            pystray.MenuItem("FortiClient VPN", lambda: self._switch(FORTI)),
+            pystray.MenuItem("Oracle VPN (Cisco)", lambda: self._switch(CISCO)),
+            pystray.MenuItem("Falabella VPN (FortiClient)", lambda: self._switch(FORTI)),
             pystray.MenuItem("No VPN", self._disconnect_all),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Settings", self._open_settings),
@@ -418,6 +494,16 @@ class VPNSwitcherApp:
     def _update_tray_icon(self):
         if self._tray:
             self._tray.icon = _make_tray_icon(self._status)
+
+    def _update_window_icon(self, state: str):
+        try:
+            from PIL import ImageTk
+            variant = "rojo" if state == CISCO else "verde" if state == FORTI else ""
+            logo = _load_logo(variant).resize((32, 32), Image.LANCZOS)
+            self._tk_icon = ImageTk.PhotoImage(logo)
+            self.root.iconphoto(True, self._tk_icon)
+        except Exception:
+            pass
 
     # ── status monitor ─────────────────────────────────────────────────────────
 
@@ -437,12 +523,12 @@ class VPNSwitcherApp:
     def _refresh_ui(self):
         s = self._status
         if s == CISCO:
-            dot_color, label = C_CISCO, "Cisco Secure Client"
+            dot_color, label = C_CISCO, "Oracle VPN (Cisco Secure Client)"
             self._btn_cisco.set_active(True)
             self._btn_forti.set_active(False)
             self._btn_none.set_active(False)
         elif s == FORTI:
-            dot_color, label = C_FORTI, "FortiClient VPN"
+            dot_color, label = C_FORTI, "Falabella VPN (FortiClient)"
             self._btn_cisco.set_active(False)
             self._btn_forti.set_active(True)
             self._btn_none.set_active(False)

@@ -18,6 +18,15 @@ def _set_dpi_aware():
         pass
 
 
+def _set_app_user_model_id():
+    """Set AppUserModelID so Windows taskbar shows our icon instead of python.exe."""
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Oracle.VPNSwitcher.1")
+    except Exception:
+        pass
+
+
 def _single_instance_guard():
     """Use a named mutex to prevent multiple instances on Windows."""
     try:
@@ -36,6 +45,7 @@ def _single_instance_guard():
 
 def main():
     _set_dpi_aware()
+    _set_app_user_model_id()
     _single_instance_guard()
 
     from ui import VPNSwitcherApp
