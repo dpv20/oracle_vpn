@@ -162,13 +162,15 @@ def _forti_get_window(timeout: float = 1.0):
 
 def _find_signin_window():
     """Find the FortiClient SAML sign-in popup (Chromium window).
-    Matches English and Spanish titles."""
+    Matches English, Spanish, and FortiClient-titled popups."""
     try:
         from pywinauto import Desktop
         desktop = Desktop(backend="win32")
         for w in desktop.windows():
             title = w.window_text().lower()
-            if "sign in to your account" in title or "iniciar sesión" in title:
+            if ("sign in to your account" in title
+                    or "iniciar sesión" in title
+                    or ("forticlient" in title and "(" in title)):
                 return w
     except Exception:
         pass
@@ -252,15 +254,14 @@ def _get_signin_page_text() -> str:
 
 
 def _check_password_rejected(timeout: float = 8.0, title_before: str = "") -> bool:
-    """Detect if the password was rejected using red pixel detection.
+    """Detect if the password was rejected using red pixel + page text detection.
 
     Microsoft shows 'Your account or password is incorrect' in bright red.
-    The MFA page has no red error text.
-
-    Waits for the page to react (title change or timeout), then captures
-    the window and counts red pixels.
+    However, some verification pages ('We need to verify more') also have red
+    elements — so when red pixels are detected we re-read the page text to
+    confirm it's an actual password error, not a verification/MFA step.
     """
-    # Wait for the page to react (title changes when page navigates/reloads)
+    # Wait for the page to react (title change or timeout)
     deadline = time.time() + timeout
     while time.time() < deadline:
         time.sleep(0.5)
@@ -268,16 +269,36 @@ def _check_password_rejected(timeout: float = 8.0, title_before: str = "") -> bo
         if not sign_in_win:
             return False  # Window gone — success
         if title_before and sign_in_win.window_text() != title_before:
-            break  # Page reacted — stop waiting early
+            break  # Page reacted
 
-    # Let the page fully render before taking screenshot
-    time.sleep(2.0)
+    time.sleep(2.0)  # Let page fully render
 
     sign_in_win = _find_signin_window()
     if not sign_in_win:
-        return False  # Window gone — success
+        return False
 
-    return _window_has_red_error(sign_in_win.handle)
+    if not _window_has_red_error(sign_in_win.handle):
+        return False  # No red pixels — password accepted, moving on
+
+    # Red pixels detected — could be wrong password OR a verification page.
+    # Re-read page text to distinguish.
+    page = _detect_signin_page(sign_in_win.handle)
+    if page == "mfa":
+        _click_authenticator_button()
+        return False
+
+    text = _get_clipboard_text().lower()
+    verification_keywords = [
+        "verify", "verificar", "approve", "aprobar", "authenticator",
+        "more information", "más información", "we need", "necesitamos",
+        "additional", "conditional", "access", "sign-in options",
+    ]
+    if any(kw in text for kw in verification_keywords):
+        # It's a verification/MFA page with red UI elements — not a wrong password
+        _click_authenticator_button()
+        return False
+
+    return True  # Red pixels + error keywords = actual wrong password
 
 
 def _window_has_red_error(hwnd) -> bool:
@@ -310,6 +331,101 @@ def _window_has_red_error(hwnd) -> bool:
 
     except Exception:
         return False
+
+
+def _get_clipboard_text() -> str:
+    """Read text from the Windows clipboard via PowerShell Get-Clipboard."""
+    try:
+        _, out, _ = _run(
+            ["powershell.exe", "-NoProfile", "-Command", "Get-Clipboard"],
+            timeout=5,
+        )
+        return out.strip()
+    except Exception:
+        return ""
+
+
+def _detect_signin_page(hwnd) -> str:
+    """Detect which sign-in page is shown by reading text via Ctrl+A + Ctrl+C.
+
+    Works across different PCs, branding, window sizes, and languages.
+    After reading, clicks the input field area to restore focus for typing.
+
+    Returns:
+        'password' — password entry page
+        'email'    — email/username entry page
+        'mfa'      — MFA / verify identity page
+        'unknown'  — could not determine
+    """
+    from pywinauto import keyboard
+    import ctypes
+    user32 = ctypes.windll.user32
+
+    try:
+        _force_foreground(hwnd)
+        time.sleep(0.3)
+        if user32.GetForegroundWindow() != hwnd:
+            return "unknown"
+
+        # Click on the banner/logo area at the very top of the page content
+        # (~50 px below the window top, above any interactive elements on both pages).
+        # This gives Chromium real keyboard focus and blurs any focused input,
+        # so Ctrl+A selects ALL page text — not just the focused input field.
+        import ctypes.wintypes
+        rect = ctypes.wintypes.RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        cx = (rect.left + rect.right) // 2
+        cy = rect.top + 50   # just below title bar → banner/logo area, always safe
+        user32.SetCursorPos(cx, cy)
+        time.sleep(0.05)
+        user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+        time.sleep(0.02)
+        user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+        time.sleep(0.2)
+
+        # Select all page text and copy to clipboard
+        keyboard.send_keys("^a", pause=0.05)
+        time.sleep(0.15)
+        keyboard.send_keys("^c", pause=0.05)
+        time.sleep(0.2)
+
+        text = _get_clipboard_text().lower()
+
+        # Debug log
+        try:
+            import os, tempfile
+            log_path = os.path.join(tempfile.gettempdir(), "vpnswitcher_page_detect.txt")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"page_text: {repr(text[:300])}\n")
+        except Exception:
+            pass
+
+        if not text:
+            result = "unknown"
+        elif any(kw in text for kw in [
+            "enter password", "contraseña", "forgot my password",
+            "olvidé mi contraseña", "forgot password",
+        ]):
+            result = "password"
+        elif any(kw in text for kw in [
+            "verify your identity", "verificar tu identidad",
+            "approve sign in", "aprobar solicitud", "authenticator",
+        ]):
+            result = "mfa"
+        else:
+            result = "email"
+
+        # Email page:    1 Tab from body → email input
+        # Password page: 2 Tabs from body → skip back-arrow button → password input
+        tab_count = 2 if result == "password" else 1
+        for _ in range(tab_count):
+            keyboard.send_keys("{TAB}", pause=0.1)
+            time.sleep(0.15)
+
+        return result
+
+    except Exception:
+        return "unknown"
 
 
 def _click_authenticator_button(timeout: float = 8.0):
@@ -362,10 +478,9 @@ def _click_authenticator_button(timeout: float = 8.0):
 
 def _forti_autofill_signin(username: str, password: str) -> str:
     """Wait for the FortiClient SAML sign-in popup and auto-fill credentials.
-    The window is Chromium-based so we use keyboard input.
-    Re-finds and re-focuses the window before each step.
-    Only fills password if we successfully filled the username first.
-    After password, clicks the Authenticator approve button if it appears.
+
+    Adaptively detects which page is shown (email or password) before typing,
+    so it works on PCs that skip the email page or show password directly.
 
     Returns:
         'ok'             — credentials submitted (or no popup appeared)
@@ -377,70 +492,87 @@ def _forti_autofill_signin(username: str, password: str) -> str:
         deadline = time.time() + 20
         sign_in_win = None
         while time.time() < deadline:
+            if _autofill_cancel.is_set():
+                return "ok"
             sign_in_win = _find_signin_window()
             if sign_in_win:
                 break
             time.sleep(0.5)
 
         if not sign_in_win:
-            return "no_popup"  # No popup — maybe session cached or auto-connected
+            return "no_popup"
 
         time.sleep(1.5)  # Let the page fully render
 
-        # Step 2: Fill username
-        username_ok = False
-        password_ok = False
-        if username:
-            sign_in_win = _find_signin_window()
-            if not sign_in_win:
+        # Step 2: Detect page — leaves input focused via Tab at the end
+        page = _detect_signin_page(sign_in_win.handle)
+
+        if page == "mfa":
+            _click_authenticator_button()
+            return "ok"
+
+        title_before = ""
+        password_typed = False
+
+        # Helper: type into the already-focused input.
+        # Uses SetForegroundWindow (not SetFocus) so Chromium keeps its internal
+        # focus on the input that Tab already selected. No Ctrl+A — inputs are
+        # empty on first load so we just type directly.
+        def _type_into_focused(text, press_enter=True) -> bool:
+            import ctypes
+            from pywinauto import keyboard as kb
+            if _autofill_cancel.is_set():
+                return False
+            # Light re-activation: make the window active without triggering
+            # WM_SETFOCUS which would reset Chromium's internal focus to body.
+            ctypes.windll.user32.SetForegroundWindow(sign_in_win.handle)
+            time.sleep(0.15)
+            kb.send_keys(text, with_spaces=True, pause=0.03)
+            time.sleep(0.1)
+            if press_enter:
+                kb.send_keys("{ENTER}", pause=0.05)
+            return True
+
+        # Step 3a: Email page — type email, then wait for transition
+        if page == "email" and username:
+            if _autofill_cancel.is_set():
                 return "ok"
+            _type_into_focused(username, press_enter=True)
 
+            # Wait for page to transition (up to 9 s, one detection check every 3 s).
+            # Don't loop _detect_signin_page rapidly — each call clicks the page.
             for _ in range(3):
+                if _autofill_cancel.is_set():
+                    return "ok"
+                time.sleep(3.0)
                 sign_in_win = _find_signin_window()
                 if not sign_in_win:
                     return "ok"
-                if _focus_and_type(sign_in_win.handle, username, press_enter=True):
-                    username_ok = True
+                page = _detect_signin_page(sign_in_win.handle)
+                if page in ("password", "mfa"):
                     break
-                time.sleep(1)
 
-            # Step 3: Wait for password page — only if WE filled the username
-            if password and username_ok:
-                time.sleep(1.5)
+        if page == "mfa":
+            _click_authenticator_button()
+            return "ok"
 
-                sign_in_win = _find_signin_window()
-                if not sign_in_win:
-                    return "ok"
-
-                time.sleep(1.5)
-
-                for _ in range(3):
-                    sign_in_win = _find_signin_window()
-                    if not sign_in_win:
-                        return "ok"
-                    # Capture title BEFORE submitting password
-                    title_before = sign_in_win.window_text()
-                    if _focus_and_type(sign_in_win.handle, password, press_enter=True):
-                        password_ok = True
-                        break
-                    time.sleep(1)
-
-        elif password:
-            for _ in range(3):
-                sign_in_win = _find_signin_window()
-                if not sign_in_win:
-                    return "ok"
+        # Step 3b: Type password — only when detection confirmed password page.
+        # Do NOT use "email" as a fallback: if the page didn't transition it means
+        # the email wasn't accepted, and typing the password here would put it in
+        # the email field.
+        if password and page == "password":
+            if _autofill_cancel.is_set():
+                return "ok"
+            sign_in_win = _find_signin_window()
+            if sign_in_win:
                 title_before = sign_in_win.window_text()
-                if _focus_and_type(sign_in_win.handle, password, press_enter=True):
-                    password_ok = True
-                    break
-                time.sleep(1)
+                if _type_into_focused(password, press_enter=True):
+                    password_typed = True
 
         # Step 4: Check if password was rejected, otherwise click Authenticator
-        if password_ok:
+        if password_typed:
             if _check_password_rejected(timeout=10, title_before=title_before):
                 return "wrong_password"
-            # Password accepted — try clicking the Authenticator approve button
             _click_authenticator_button()
 
         return "ok"
@@ -693,7 +825,7 @@ class VPNController:
     def retry_forti_credentials(self, failed_step: str = "password") -> Tuple[bool, str]:
         """Retry the password after a rejection (username is assumed correct).
         The sign-in window must still be open on the password page.
-        Just focuses and types — no re-detection, user sees result on screen."""
+        Checks for rejection again so the UI can re-prompt if still wrong."""
         from config_manager import decrypt_password
 
         if _autofill_cancel.is_set():
@@ -706,5 +838,13 @@ class VPNController:
             return False, "La ventana de sign-in se cerró. Intenta conectar FortiClient de nuevo."
 
         password = decrypt_password(self.config.get("forti_password_enc", ""))
+        title_before = sign_in_win.window_text()
         _focus_and_type(sign_in_win.handle, password, press_enter=True)
+
+        # Check if the new password was also rejected
+        if _check_password_rejected(timeout=10, title_before=title_before):
+            return False, "__WRONG_PASSWORD__"
+
+        # Password accepted — try clicking the Authenticator approve button
+        _click_authenticator_button()
         return True, "Nueva contraseña enviada — aprueba MFA si se solicita."

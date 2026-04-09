@@ -695,26 +695,38 @@ class VPNSwitcherApp:
         self.root.after(300, lambda: self._start_retry(target))
 
     def _start_retry(self, target: str):
-        """Start the password retry thread (called after Settings dialog closes)."""
+        """Close the sign-in window and restart the full connect flow with
+        the updated credentials saved in Settings."""
         import vpn_controller as _vc
+        import ctypes
         _vc._autofill_cancel.clear()
 
-        # Hide the main window so it doesn't compete for focus with the sign-in window
+        # Close the existing sign-in popup so FortiClient resets to Connect state
+        sign_in_win = _vc._find_signin_window()
+        if sign_in_win:
+            ctypes.windll.user32.PostMessageW(sign_in_win.handle, 0x0010, 0, 0)  # WM_CLOSE
+            time.sleep(1.5)
+
+        # Hide main window so it doesn't compete for focus
         self.root.withdraw()
 
         def _retry():
             self._set_busy(True)
             try:
-                self._msg("Reintentando con nueva contraseña…")
-                ok, msg = self.controller.retry_forti_credentials()
+                # Reload config with the new credentials
+                self.config = self.config_manager.load()
+                self.controller.config = self.config
+
+                self._msg("Reconectando con nuevas credenciales…")
+                ok, msg = self.controller.connect_forti()
                 if msg == "__WRONG_PASSWORD__":
                     self._msg("⚠  Contraseña incorrecta — actualízala en Settings.")
                     self.root.after(0, self.root.deiconify)
                     self.root.after(0, lambda: self._handle_wrong_password(target))
                     return
-                # Password sent — stay hidden while user completes MFA
+
                 self._msg(msg)
-                # Poll until VPN connects or timeout (90s for MFA approval)
+                # Poll until VPN connects or timeout (90 s for MFA approval)
                 deadline = time.time() + 90
                 while time.time() < deadline:
                     time.sleep(3)
