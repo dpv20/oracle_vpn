@@ -79,11 +79,17 @@ class ConfigManager:
         cfg = self.load()
         return bool(cfg.get("cisco_host") or cfg.get("forti_exe_path") or cfg.get("forti_connect_cmd"))
 
-    def _get_exe_path(self) -> str:
-        """Return the path to this application's executable."""
+    def _get_startup_cmd(self) -> str:
+        """Return the full command to launch this app from Windows startup."""
         if getattr(sys, "frozen", False):
-            return sys.executable
-        return os.path.abspath(sys.argv[0])
+            # Bundled exe — just the exe path
+            return f'"{sys.executable}"'
+        # Running from source — use pythonw.exe (no console window)
+        pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        if not os.path.exists(pythonw):
+            pythonw = sys.executable  # fallback to python.exe
+        script = os.path.abspath(sys.argv[0])
+        return f'"{pythonw}" "{script}"'
 
     def _apply_startup(self, enabled: bool):
         try:
@@ -91,7 +97,7 @@ class ConfigManager:
                 winreg.HKEY_CURRENT_USER, STARTUP_KEY, 0, winreg.KEY_SET_VALUE
             )
             if enabled:
-                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, f'"{self._get_exe_path()}"')
+                winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, self._get_startup_cmd())
             else:
                 try:
                     winreg.DeleteValue(key, APP_NAME)

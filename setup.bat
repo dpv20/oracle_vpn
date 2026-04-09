@@ -60,14 +60,6 @@ powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.
 
 echo [OK] Desktop shortcut created: %DESKTOP%\VPN Switcher.lnk
 
-:: Startup registry (optional — app also exposes this toggle in Settings)
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" ^
-    /v "VPN Switcher" ^
-    /t REG_SZ ^
-    /d "\"%PYTHONW%\" \"%SCRIPT%\"" ^
-    /f >nul
-echo [OK] Added to Windows startup.
-
 :: ── Done ──────────────────────────────────────────────────────────────────────
 echo.
 echo [3/3] Setup complete!
@@ -76,8 +68,12 @@ echo ============================================================
 echo  VPN Switcher is ready!
 echo.
 echo   Desktop shortcut : VPN Switcher.lnk
-echo   Starts with Windows: yes (toggle in Settings)
+echo   Starts with Windows: yes (toggle off in Settings)
 echo   To uninstall     : run uninstall.bat
 echo ============================================================
 echo.
-pause
+
+:: Launch the app now
+echo Launching VPN Switcher...
+start "" "%PYTHONW%" "%SCRIPT%"
+timeout /t 2 /nobreak >nul
