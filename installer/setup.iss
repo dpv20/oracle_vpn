@@ -1,10 +1,10 @@
 ; VPN Switcher — Inno Setup 6 script
-; Compile this with Inno Setup 6: https://jrsoftware.org/isdl.php
+; Compile via build.bat or manually with Inno Setup 6: https://jrsoftware.org/isdl.php
 
 #define AppName "VPN Switcher"
-#define AppVersion "1.0"
+#define AppVersion "1.0.0"
 #define AppExeName "VPNSwitcher.exe"
-#define AppPublisher "Oracle IT"
+#define AppPublisher "Oracle IT — Diego Pavez Verdi"
 
 [Setup]
 AppId={{A3F2C8D1-4B5E-4F9A-8C3D-2E7B1A6F0E4D}
@@ -16,27 +16,28 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\Output
 OutputBaseFilename=VPNSwitcher-Setup
-SetupIconFile=
+SetupIconFile=..\logo_cuadrado.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-; Require the app to be uninstalled before reinstalling
 CloseApplications=yes
 RestartIfNeededByRun=no
+; Minimum Windows 10
+MinVersion=10.0
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "startupentry"; Description: "Start VPN Switcher automatically when Windows starts (recommended)"; GroupDescription: "Additional tasks:"; Flags: checked
-Name: "desktopicon";  Description: "Create a &desktop shortcut";                                        GroupDescription: "Additional tasks:"; Flags: unchecked
+Name: "desktopicon";  Description: "Create a &desktop shortcut"; GroupDescription: "Additional tasks:"; Flags: checked
 
 [Files]
-; All PyInstaller output files
-Source: "..\dist\VPNSwitcher\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Single-file PyInstaller output
+Source: "..\dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#AppName}";    Filename: "{app}\{#AppExeName}"
+Name: "{group}\{#AppName}";         Filename: "{app}\{#AppExeName}"
 Name: "{commondesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
 [Registry]
@@ -47,22 +48,16 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
     Flags: uninsdeletevalue; Tasks: startupentry
 
 [Run]
-; Launch the app after installation finishes
 Filename: "{app}\{#AppExeName}"; \
     Description: "Launch {#AppName} now"; \
     Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Kill the app before uninstalling
 Filename: "taskkill"; Parameters: "/F /IM {#AppExeName}"; Flags: runhidden; RunOnceId: "KillApp"
 
 [Code]
-// Remove startup registry entry on uninstall if it was added by the app itself
-// (the [Registry] block handles this via uninsdeletevalue, this is just a safety net)
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
-  begin
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#AppName}');
-  end;
 end;

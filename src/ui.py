@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 
 from vpn_controller import CISCO, FORTI, NONE, VPNController
 from config_manager import ConfigManager
+from utils import resource_path
 
 # ── palette ────────────────────────────────────────────────────────────────────
 BG = "#1e1e2e"
@@ -40,10 +41,8 @@ def _load_logo(variant: str = "") -> Image.Image:
     """Load a logo PNG and remove white border pixels.
     variant: '' = logo_cuadrado.png, 'rojo' = logo_cuadrado_rojo.png, 'verde' = logo_cuadrado_verde.png
     """
-    import os
-    base = os.path.dirname(os.path.dirname(__file__))
     name = f"logo_cuadrado_{variant}.png" if variant else "logo_cuadrado.png"
-    logo_path = os.path.join(base, name)
+    logo_path = resource_path(name)
     img = Image.open(logo_path).convert("RGBA")
     data = img.getdata()
     new_data = [
@@ -348,8 +347,9 @@ class VPNSwitcherApp:
         root.rowconfigure(1, weight=0)  # status card
         root.rowconfigure(2, weight=0)  # buttons
         root.rowconfigure(3, weight=1)  # spacer
-        root.rowconfigure(4, weight=0)  # message
-        root.rowconfigure(5, weight=0)  # settings bar
+        root.rowconfigure(4, weight=0)  # update banner
+        root.rowconfigure(5, weight=0)  # message
+        root.rowconfigure(6, weight=0)  # settings bar
 
         # ── header ────────────────────────────────────────────────────────────
         hdr = tk.Frame(root, bg=BG, pady=14)
@@ -463,14 +463,22 @@ class VPNSwitcherApp:
         # ── spacer ────────────────────────────────────────────────────────────
         tk.Frame(root, bg=BG).grid(row=3, column=0)
 
+        # ── update banner (hidden until an update is detected) ───────────────
+        self._update_lbl = tk.Label(
+            root, text="", bg=BG, fg=C_WARN,
+            font=("Segoe UI", 8, "underline"), cursor="hand2"
+        )
+        self._update_lbl.grid(row=4, column=0, pady=(4, 0))
+        self._update_lbl.bind("<Button-1>", self._open_update_url)
+
         # ── message area ──────────────────────────────────────────────────────
         self._msg_lbl = tk.Label(root, text="", bg=BG, fg=MUTED,
                                  font=("Segoe UI", 8), wraplength=290)
-        self._msg_lbl.grid(row=4, column=0, pady=(6, 0), padx=20)
+        self._msg_lbl.grid(row=5, column=0, pady=(2, 0), padx=20)
 
         # ── settings bar ──────────────────────────────────────────────────────
         bottom = tk.Frame(root, bg=BG, pady=10, padx=20)
-        bottom.grid(row=5, column=0, sticky="ew")
+        bottom.grid(row=6, column=0, sticky="ew")
         tk.Button(
             bottom, text="⚙  Settings",
             bg=SURFACE, fg=MUTED, relief=tk.FLAT,
@@ -845,6 +853,39 @@ class VPNSwitcherApp:
         self.config_manager.save(self.config)
         self.controller.config = self.config
 
+    # ── auto-update check ──────────────────────────────────────────────────────
+
+    def _check_for_update(self):
+        """Background thread: compare installed version with GitHub version.json."""
+        try:
+            import json
+            import urllib.request
+            from version import __version__
+
+            url = ("https://raw.githubusercontent.com/dpv20/oracle_vpn"
+                   "/main/version.json")
+            with urllib.request.urlopen(url, timeout=6) as resp:
+                data = json.loads(resp.read())
+
+            latest = data.get("version", "")
+            download_url = data.get("download_url", "https://github.com/dpv20/oracle_vpn/releases/latest")
+
+            def _ver(v):
+                return tuple(int(x) for x in v.split("."))
+
+            if latest and _ver(latest) > _ver(__version__):
+                self._update_url = download_url
+                self.root.after(0, lambda: self._update_lbl.configure(
+                    text=f"⬆  Update available v{latest} — click to download"
+                ))
+        except Exception:
+            pass  # No internet or rate-limited — silently ignore
+
+    def _open_update_url(self, *_):
+        import webbrowser
+        webbrowser.open(getattr(self, "_update_url",
+                                "https://github.com/dpv20/oracle_vpn/releases/latest"))
+
     # ── helpers ────────────────────────────────────────────────────────────────
 
     def _msg(self, text: str):
@@ -868,6 +909,12 @@ class VPNSwitcherApp:
 
         # Start polling thread
         threading.Thread(target=self._monitor, daemon=True).start()
+
+        # Check for updates in background (5 s delay so UI is ready first)
+        def _delayed_update_check():
+            time.sleep(5)
+            self._check_for_update()
+        threading.Thread(target=_delayed_update_check, daemon=True).start()
 
         # Show window, then enter main loop
         self._center_window()

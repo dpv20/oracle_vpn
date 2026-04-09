@@ -5,7 +5,8 @@ Ensures only one instance runs and starts the application.
 import os
 import sys
 
-# Make sure the src/ folder is on the path when running from source
+# Running from source: add src/ to path.
+# Running frozen (PyInstaller): modules are at the root of sys._MEIPASS.
 sys.path.insert(0, os.path.dirname(__file__))
 
 
