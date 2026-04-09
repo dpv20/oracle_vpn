@@ -13,7 +13,7 @@ from PIL import Image, ImageDraw
 
 from vpn_controller import CISCO, FORTI, NONE, VPNController
 from config_manager import ConfigManager
-from utils import resource_path
+from utils import asset_path
 
 # ── palette ────────────────────────────────────────────────────────────────────
 BG = "#1e1e2e"
@@ -42,7 +42,7 @@ def _load_logo(variant: str = "") -> Image.Image:
     variant: '' = logo_cuadrado.png, 'rojo' = logo_cuadrado_rojo.png, 'verde' = logo_cuadrado_verde.png
     """
     name = f"logo_cuadrado_{variant}.png" if variant else "logo_cuadrado.png"
-    logo_path = resource_path(name)
+    logo_path = asset_path(name)
     img = Image.open(logo_path).convert("RGBA")
     data = img.getdata()
     new_data = [
@@ -863,7 +863,7 @@ class VPNSwitcherApp:
             from version import __version__
 
             url = ("https://raw.githubusercontent.com/dpv20/oracle_vpn"
-                   "/main/version.json")
+                   "/main/assets/version.json")
             with urllib.request.urlopen(url, timeout=6) as resp:
                 data = json.loads(resp.read())
 
