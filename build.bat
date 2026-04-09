@@ -51,10 +51,10 @@ python -m PyInstaller ^
     --onefile ^
     --windowed ^
     --name VPNSwitcher ^
-    --icon logo_cuadrado.ico ^
-    --add-data "logo_cuadrado.png;." ^
-    --add-data "logo_cuadrado_rojo.png;." ^
-    --add-data "logo_cuadrado_verde.png;." ^
+    --icon assets\logo_cuadrado.ico ^
+    --add-data "assets\logo_cuadrado.png;assets" ^
+    --add-data "assets\logo_cuadrado_rojo.png;assets" ^
+    --add-data "assets\logo_cuadrado_verde.png;assets" ^
     --paths src ^
     --hidden-import pywinauto.backends.win32_hooks ^
     --hidden-import comtypes.stream ^
