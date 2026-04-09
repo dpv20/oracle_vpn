@@ -82,12 +82,12 @@ class ConfigManager:
     def _get_startup_cmd(self) -> str:
         """Return the full command to launch this app from Windows startup."""
         if getattr(sys, "frozen", False):
-            # Bundled exe — just the exe path
             return f'"{sys.executable}"'
-        # Running from source — use pythonw.exe (no console window)
-        pythonw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+        # sys.prefix always points to the real Python install dir,
+        # even when launched via py.exe or pythonw.exe launchers.
+        pythonw = os.path.join(sys.prefix, "pythonw.exe")
         if not os.path.exists(pythonw):
-            pythonw = sys.executable  # fallback to python.exe
+            pythonw = os.path.join(sys.prefix, "python.exe")
         script = os.path.abspath(sys.argv[0])
         return f'"{pythonw}" "{script}"'
 

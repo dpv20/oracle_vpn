@@ -47,12 +47,11 @@ set "SCRIPT=%APP_DIR%\src\main.py"
 set "ICON=%APP_DIR%\assets\logo_cuadrado.ico"
 set "DESKTOP=%USERPROFILE%\Desktop"
 
-:: Find pythonw.exe (same folder as python.exe, no console window)
-for /f "tokens=*" %%p in ('python -c "import sys,os; print(os.path.join(os.path.dirname(sys.executable),'pythonw.exe'))"') do set "PYTHONW=%%p"
+:: Find pythonw.exe via sys.prefix (works even when launched via py.exe launcher)
+for /f "tokens=*" %%p in ('python -c "import sys,os; print(os.path.join(sys.prefix,'pythonw.exe'))"') do set "PYTHONW=%%p"
 
 if not exist "%PYTHONW%" (
-    :: Fallback: use python.exe if pythonw.exe not found
-    for /f "tokens=*" %%p in ('python -c "import sys; print(sys.executable)"') do set "PYTHONW=%%p"
+    for /f "tokens=*" %%p in ('python -c "import sys,os; print(os.path.join(sys.prefix,'python.exe'))"') do set "PYTHONW=%%p"
 )
 
 :: Desktop shortcut via PowerShell (single line to avoid ^ passthrough issues)
