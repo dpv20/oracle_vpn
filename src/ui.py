@@ -219,7 +219,13 @@ class SettingsDialog(tk.Toplevel):
             canvas.configure(scrollregion=canvas.bbox("all"))
         frame.bind("<Configure>", _on_frame_resize)
 
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+        def _on_mousewheel(e):
+            try:
+                canvas.yview_scroll(-1 * (e.delta // 120), "units")
+            except Exception:
+                pass
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        self.bind("<Destroy>", lambda _: canvas.unbind_all("<MouseWheel>"))
 
         # ── Cisco ──────────────────────────────────────────────────────────────
         self._section(frame, "Cisco Secure Client")
