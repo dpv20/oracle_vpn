@@ -65,6 +65,8 @@ class ConfigManager:
             # Fill in any missing keys from defaults
             for k, v in DEFAULTS.items():
                 data.setdefault(k, v)
+            # Always sync startup registry on load so it survives reinstalls
+            self._apply_startup(data.get("start_with_windows", True))
             return data
         except Exception:
             return DEFAULTS.copy()
