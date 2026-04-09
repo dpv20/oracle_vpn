@@ -55,16 +55,8 @@ if not exist "%PYTHONW%" (
     for /f "tokens=*" %%p in ('python -c "import sys; print(sys.executable)"') do set "PYTHONW=%%p"
 )
 
-:: Desktop shortcut via PowerShell
-powershell -NoProfile -Command ^
-    "$ws = New-Object -ComObject WScript.Shell;" ^
-    "$s = $ws.CreateShortcut('%DESKTOP%\VPN Switcher.lnk');" ^
-    "$s.TargetPath = '%PYTHONW%';" ^
-    "$s.Arguments = '\""%SCRIPT%\"';" ^
-    "$s.WorkingDirectory = '%APP_DIR%';" ^
-    "$s.IconLocation = '%ICON%';" ^
-    "$s.Description = 'VPN Switcher';" ^
-    "$s.Save()"
+:: Desktop shortcut via PowerShell (single line to avoid ^ passthrough issues)
+powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.CreateShortcut('%DESKTOP%\VPN Switcher.lnk'); $s.TargetPath='%PYTHONW%'; $s.Arguments='\"%SCRIPT%\"'; $s.WorkingDirectory='%APP_DIR%'; $s.IconLocation='%ICON%'; $s.Description='VPN Switcher'; $s.Save()"
 
 echo [OK] Desktop shortcut created: %DESKTOP%\VPN Switcher.lnk
 
