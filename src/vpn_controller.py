@@ -581,6 +581,113 @@ def _forti_autofill_signin(username: str, password: str) -> str:
         return "ok"
 
 
+def _forti_autofill_custom_flow(username: str, password: str, steps: list) -> str:
+    """Execute a user-defined sign-in sequence without page detection.
+
+    steps: ordered subset of ["username", "password", "mfa"]
+    Each step is executed in order; unchecked steps are skipped.
+
+    Returns 'ok', 'wrong_password', or 'no_popup'.
+    """
+    try:
+        # Wait for sign-in window
+        deadline = time.time() + 20
+        sign_in_win = None
+        while time.time() < deadline:
+            if _autofill_cancel.is_set():
+                return "ok"
+            sign_in_win = _find_signin_window()
+            if sign_in_win:
+                break
+            time.sleep(0.5)
+
+        if not sign_in_win:
+            return "no_popup"
+
+        time.sleep(1.5)
+
+        title_before = ""
+        password_typed = False
+        # Track if we already typed username so we know the password page
+        # will have a back arrow (needs 2 Tabs instead of 1).
+        typed_username = False
+
+        def _focus_and_type_step(tab_count: int, text: str, press_enter: bool = True) -> bool:
+            """Click banner to give Chromium focus, Tab to input, then type."""
+            import ctypes, ctypes.wintypes
+            from pywinauto import keyboard as kb
+            user32 = ctypes.windll.user32
+
+            nonlocal sign_in_win
+            sign_in_win = _find_signin_window()
+            if not sign_in_win or _autofill_cancel.is_set():
+                return False
+
+            _force_foreground(sign_in_win.handle)
+            time.sleep(0.2)
+            if user32.GetForegroundWindow() != sign_in_win.handle:
+                return False
+
+            # Click banner area (top+50) to give Chromium keyboard focus
+            rect = ctypes.wintypes.RECT()
+            user32.GetWindowRect(sign_in_win.handle, ctypes.byref(rect))
+            cx = (rect.left + rect.right) // 2
+            cy = rect.top + 50
+            user32.SetCursorPos(cx, cy)
+            time.sleep(0.05)
+            user32.mouse_event(0x0002, 0, 0, 0, 0)
+            time.sleep(0.02)
+            user32.mouse_event(0x0004, 0, 0, 0, 0)
+            time.sleep(0.2)
+
+            for _ in range(tab_count):
+                kb.send_keys("{TAB}", pause=0.1)
+                time.sleep(0.15)
+
+            # Light re-activation before typing
+            user32.SetForegroundWindow(sign_in_win.handle)
+            time.sleep(0.15)
+            kb.send_keys(text, with_spaces=True, pause=0.03)
+            time.sleep(0.1)
+            if press_enter:
+                kb.send_keys("{ENTER}", pause=0.05)
+            return True
+
+        for step in steps:
+            if _autofill_cancel.is_set():
+                return "ok"
+
+            if step == "username" and username:
+                # Email page: 1 Tab from banner → email input
+                _focus_and_type_step(tab_count=1, text=username)
+                typed_username = True
+                time.sleep(3.0)  # Wait for page transition
+
+            elif step == "password" and password:
+                # Password page after email: back arrow present → 2 Tabs
+                # Password page as first step (no email): no back arrow → 1 Tab
+                tab_count = 2 if typed_username else 1
+                sign_in_win = _find_signin_window()
+                if sign_in_win:
+                    title_before = sign_in_win.window_text()
+                if _focus_and_type_step(tab_count=tab_count, text=password):
+                    password_typed = True
+
+            elif step == "mfa":
+                _click_authenticator_button()
+                return "ok"
+
+        if password_typed:
+            if _check_password_rejected(timeout=10, title_before=title_before):
+                return "wrong_password"
+            _click_authenticator_button()
+
+        return "ok"
+
+    except Exception:
+        return "ok"
+
+
 def _forti_click_button(win, button_texts, timeout: float = 5.0) -> bool:
     """Find and click a button in the FortiClient Electron window via UIA.
     button_texts can be a string or list of strings (e.g. English + Spanish).
@@ -771,7 +878,13 @@ class VPNController:
             username = self.config.get("forti_username", "").strip()
             password = decrypt_password(self.config.get("forti_password_enc", ""))
             if username or password:
-                result = _forti_autofill_signin(username, password)
+                flow_mode  = self.config.get("forti_flow_mode", "detect")
+                flow_steps = self.config.get("forti_flow_steps",
+                                             ["username", "password", "mfa"])
+                if flow_mode == "custom":
+                    result = _forti_autofill_custom_flow(username, password, flow_steps)
+                else:
+                    result = _forti_autofill_signin(username, password)
                 if result == "wrong_password":
                     return False, "__WRONG_PASSWORD__"
                 return True, "Credentials submitted — approve MFA if prompted."

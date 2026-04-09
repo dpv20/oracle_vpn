@@ -393,6 +393,73 @@ class VPNSwitcherApp:
         )
         self._btn_none.pack(fill=tk.X, pady=4)
 
+        # ── FortiClient autofill toggle button ────────────────────────────────
+        self._forti_panel_open = False
+        self._forti_toggle_btn = tk.Button(
+            btn_area, text="▶  FortiClient autofill",
+            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
+            font=("Segoe UI", 8), pady=5, padx=10, anchor="w",
+            command=self._toggle_forti_panel, cursor="hand2"
+        )
+        self._forti_toggle_btn.pack(fill=tk.X, pady=(4, 0))
+
+        # ── Collapsible autofill panel (hidden by default) ────────────────────
+        saved_mode  = self.config.get("forti_flow_mode", "detect")
+        saved_steps = self.config.get("forti_flow_steps", ["username", "password", "mfa"])
+        self._forti_mode_var     = tk.StringVar(value=saved_mode)
+        self._forti_use_username = tk.BooleanVar(value="username" in saved_steps)
+        self._forti_use_password = tk.BooleanVar(value="password" in saved_steps)
+        self._forti_use_mfa      = tk.BooleanVar(value="mfa"      in saved_steps)
+
+        self._forti_panel = tk.Frame(btn_area, bg=SURFACE, padx=12, pady=10)
+        # (not packed — starts collapsed)
+
+        # Auto-detect option
+        auto_rb = tk.Radiobutton(
+            self._forti_panel, text="Auto-detect",
+            variable=self._forti_mode_var, value="detect",
+            bg=SURFACE, fg=TEXT, selectcolor=BG, activebackground=SURFACE,
+            font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
+        )
+        auto_rb.pack(anchor="w")
+        tk.Label(
+            self._forti_panel,
+            text="Reads each sign-in page and decides automatically\n"
+                 "what to type: email, password or MFA.",
+            bg=SURFACE, fg=MUTED, font=("Segoe UI", 7), justify="left"
+        ).pack(anchor="w", padx=(22, 0), pady=(0, 8))
+
+        # Custom flow option
+        custom_rb = tk.Radiobutton(
+            self._forti_panel, text="Custom flow",
+            variable=self._forti_mode_var, value="custom",
+            bg=SURFACE, fg=TEXT, selectcolor=BG, activebackground=SURFACE,
+            font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
+        )
+        custom_rb.pack(anchor="w")
+        tk.Label(
+            self._forti_panel,
+            text="Is faster, You define which steps your FortiClient shows.\n"
+                 "Uncheck steps that don't appear on your PC.",
+            bg=SURFACE, fg=MUTED, font=("Segoe UI", 7), justify="left"
+        ).pack(anchor="w", padx=(22, 0), pady=(0, 4))
+
+        # Checkboxes (only visible in custom mode)
+        self._forti_custom_row = tk.Frame(self._forti_panel, bg=SURFACE)
+
+        def _chk(text, var):
+            return tk.Checkbutton(
+                self._forti_custom_row, text=text, variable=var,
+                bg=SURFACE, fg=TEXT, selectcolor=BG, activebackground=SURFACE,
+                font=("Segoe UI", 8), command=self._save_forti_flow
+            )
+        _chk("Email",    self._forti_use_username).pack(side=tk.LEFT)
+        _chk("Password", self._forti_use_password).pack(side=tk.LEFT, padx=(8, 0))
+        _chk("MFA",      self._forti_use_mfa     ).pack(side=tk.LEFT, padx=(8, 0))
+
+        if saved_mode == "custom":
+            self._forti_custom_row.pack(anchor="w", padx=(22, 0), pady=(0, 4))
+
         # ── spacer ────────────────────────────────────────────────────────────
         tk.Frame(root, bg=BG).grid(row=3, column=0)
 
@@ -741,6 +808,42 @@ class VPNSwitcherApp:
                 self.root.after(0, self.root.deiconify)
 
         threading.Thread(target=_retry, daemon=True).start()
+
+    # ── FortiClient flow mode ──────────────────────────────────────────────────
+
+    def _toggle_forti_panel(self):
+        self._forti_panel_open = not self._forti_panel_open
+        if self._forti_panel_open:
+            self._forti_panel.pack(fill=tk.X, pady=(2, 0))
+            self._forti_toggle_btn.configure(text="▼  FortiClient autofill")
+        else:
+            self._forti_panel.pack_forget()
+            self._forti_toggle_btn.configure(text="▶  FortiClient autofill")
+        # Resize window to fit new content
+        self.root.update_idletasks()
+        h = int(self.root.winfo_reqheight() * 1.10)
+        w = self.root.winfo_width()
+        self.root.geometry(f"{w}x{h}")
+
+    def _on_forti_mode_change(self):
+        if self._forti_mode_var.get() == "custom":
+            self._forti_custom_row.pack(anchor="w", padx=(22, 0), pady=(0, 4))
+        else:
+            self._forti_custom_row.pack_forget()
+        self._save_forti_flow()
+
+    def _save_forti_flow(self):
+        steps = []
+        if self._forti_use_username.get():
+            steps.append("username")
+        if self._forti_use_password.get():
+            steps.append("password")
+        if self._forti_use_mfa.get():
+            steps.append("mfa")
+        self.config["forti_flow_mode"]  = self._forti_mode_var.get()
+        self.config["forti_flow_steps"] = steps
+        self.config_manager.save(self.config)
+        self.controller.config = self.config
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
