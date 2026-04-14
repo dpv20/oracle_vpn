@@ -12,24 +12,24 @@ echo.
 :: ── 1. Check / install Python ────────────────────────────────────────────────
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo [!] Python not found. Downloading and installing Python 3.12...
+    echo Python not found. Downloading and installing Python 3.12...
     set "PYTHON_INSTALLER=%TEMP%\python_setup_%RANDOM%_%RANDOM%.exe"
     powershell -NoProfile -Command ^
-        "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe' -OutFile '%PYTHON_INSTALLER%' -UseBasicParsing"
+        "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe' -OutFile '!PYTHON_INSTALLER!' -UseBasicParsing"
     if errorlevel 1 (
         echo [ERROR] Failed to download Python installer.
-        if exist "%PYTHON_INSTALLER%" del /f /q "%PYTHON_INSTALLER%" >nul 2>&1
+        if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
         pause & exit /b 1
     )
-    "%PYTHON_INSTALLER%" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+    "!PYTHON_INSTALLER!" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
     if errorlevel 1 (
         echo [ERROR] Python installer failed.
-        if exist "%PYTHON_INSTALLER%" del /f /q "%PYTHON_INSTALLER%" >nul 2>&1
+        if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
         pause & exit /b 1
     )
-    del /f /q "%PYTHON_INSTALLER%" >nul 2>&1
+    del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
     echo.
-    echo [!] Python installed. Please close this window and run setup.bat again.
+    echo Python installed. Please close this window and run setup.bat again.
     pause & exit /b 0
 )
 
