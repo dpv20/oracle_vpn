@@ -1,96 +1,138 @@
 @echo off
 setlocal EnableDelayedExpansion
-title VPN Switcher — Setup
+title VPN Switcher - Setup
 cd /d "%~dp0"
+
+:: ── 0. Auto-elevate to admin (needed for Python installer) ───────────────────
+net session >nul 2>&1
+if not errorlevel 1 goto :ADMIN_OK
+echo Requesting administrator privileges...
+powershell -NoProfile -Command "try { Start-Process -FilePath '%~f0' -Verb RunAs -ErrorAction Stop } catch { Write-Host ''; Write-Host 'ERROR: Administrator privileges are required to install Python.' -ForegroundColor Red; Write-Host 'Right-click install.bat and choose Run as administrator.' -ForegroundColor Yellow; Write-Host ''; pause }"
+exit /b 0
+:ADMIN_OK
 
 echo.
 echo ============================================================
-echo  VPN Switcher — Setup
+echo  VPN Switcher - Setup
 echo ============================================================
 echo.
 
 :: ── 1. Check / install Python ────────────────────────────────────────────────
 python --version >nul 2>&1
-if errorlevel 1 (
-    echo Python not found. Downloading and installing Python 3.12...
-    set "PYTHON_INSTALLER=%TEMP%\python_setup_%RANDOM%_%RANDOM%.exe"
-    powershell -NoProfile -Command ^
-        "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe' -OutFile '!PYTHON_INSTALLER!' -UseBasicParsing"
-    if errorlevel 1 (
-        echo [ERROR] Failed to download Python installer.
-        if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
-        pause & exit /b 1
-    )
-    "!PYTHON_INSTALLER!" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
-    if errorlevel 1 (
-        echo [ERROR] Python installer failed.
-        if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
-        pause & exit /b 1
-    )
-    del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
-    echo.
-    echo Python installed. Please close this window and run setup.bat again.
-    pause & exit /b 0
+if errorlevel 1 goto :INSTALL_PYTHON
+
+:: Check version >= 3.8
+for /f "tokens=2" %%v in ('python --version 2^>^&1') do set "PYVER=%%v"
+for /f "tokens=1,2 delims=." %%a in ("!PYVER!") do (
+    set "PYMAJOR=%%a"
+    set "PYMINOR=%%b"
 )
+if !PYMAJOR! lss 3 goto :PYTHON_TOO_OLD
+if !PYMAJOR! equ 3 if !PYMINOR! lss 8 goto :PYTHON_TOO_OLD
+echo [OK] Python !PYVER! found.
+goto :AFTER_PYTHON
 
-for /f "tokens=*" %%v in ('python --version 2^>^&1') do echo [OK] %%v found.
+:PYTHON_TOO_OLD
+echo.
+echo [ERROR] Python !PYVER! is too old. This app requires Python 3.8 or newer.
+echo Please uninstall your current Python and run install.bat again.
+pause & exit /b 1
 
-:: ── 2. Copy app files to LOCALAPPDATA and install pip dependencies ─────────
+:INSTALL_PYTHON
+echo Python not found. Downloading and installing Python 3.12...
+set "PYTHON_INSTALLER=%TEMP%\python_setup_!RANDOM!!RANDOM!.exe"
+powershell -NoProfile -Command "try { Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe' -OutFile '!PYTHON_INSTALLER!' -UseBasicParsing } catch { Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }"
+if errorlevel 1 (
+    echo [ERROR] Failed to download Python installer. Check internet connection / proxy / firewall.
+    if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
+    pause & exit /b 1
+)
+"!PYTHON_INSTALLER!" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+set "PY_RC=!errorlevel!"
+if !PY_RC! neq 0 (
+    echo [ERROR] Python installer failed with exit code !PY_RC!.
+    if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
+    pause & exit /b 1
+)
+del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
+echo.
+echo [OK] Python installed successfully.
+echo IMPORTANT: Close this window and run install.bat again.
+pause & exit /b 0
+
+:AFTER_PYTHON
+
+:: ── 2. Copy app files to LOCALAPPDATA ────────────────────────────────────────
 echo.
 echo [1/4] Installing application files...
 set "APP_DIR=%~dp0"
-if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
+if "!APP_DIR:~-1!"=="\" set "APP_DIR=!APP_DIR:~0,-1!"
 set "INSTALL_DIR=%LOCALAPPDATA%\VPNSwitcher"
-if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-robocopy "%APP_DIR%\src" "%INSTALL_DIR%\src" /e /copy:DAT /r:2 /w:5 >nul
-set "RC=%ERRORLEVEL%"
-if %RC% geq 8 (
-    echo [ERROR] Failed to copy application files to %INSTALL_DIR%.
+if not exist "!INSTALL_DIR!" mkdir "!INSTALL_DIR!"
+
+robocopy "!APP_DIR!\src" "!INSTALL_DIR!\src" /e /copy:DAT /r:2 /w:5 >nul
+if !errorlevel! geq 8 (
+    echo [ERROR] Failed to copy src/ to !INSTALL_DIR!.
     pause & exit /b 1
 )
-robocopy "%APP_DIR%\assets" "%INSTALL_DIR%\assets" /e /copy:DAT /r:2 /w:5 >nul
-set "RC=%ERRORLEVEL%"
-if %RC% geq 8 (
-    echo [ERROR] Failed to copy application files to %INSTALL_DIR%.
+robocopy "!APP_DIR!\assets" "!INSTALL_DIR!\assets" /e /copy:DAT /r:2 /w:5 >nul
+if !errorlevel! geq 8 (
+    echo [ERROR] Failed to copy assets/ to !INSTALL_DIR!.
     pause & exit /b 1
 )
+echo [OK] Application files copied to !INSTALL_DIR!.
 
-echo [OK] Application files copied to %INSTALL_DIR%.
-
+:: ── 3. Install pip dependencies ──────────────────────────────────────────────
 echo.
-echo [2/4] Installing dependencies...
-python -m pip install --upgrade pip --quiet
-python -m pip install -r "%APP_DIR%\requirements.txt" --quiet
-
+echo [2/4] Installing dependencies (this may take a minute)...
+set "PIP_LOG=%TEMP%\vpnswitcher_pip.log"
+python -m pip install --upgrade pip > "!PIP_LOG!" 2>&1
 if errorlevel 1 (
-    echo [ERROR] Failed to install dependencies. Check your internet connection.
+    echo [WARN] pip upgrade failed, continuing with bundled version...
+)
+python -m pip install -r "!APP_DIR!\requirements.txt" > "!PIP_LOG!" 2>&1
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Failed to install dependencies. Details:
+    echo ------------------------------------------------------------
+    type "!PIP_LOG!"
+    echo ------------------------------------------------------------
+    echo Full log: !PIP_LOG!
     pause & exit /b 1
 )
+del /f /q "!PIP_LOG!" >nul 2>&1
 echo [OK] Dependencies installed.
 
-:: ── 3. Create shortcuts ───────────────────────────────────────────────────────
+:: ── 4. Create shortcut ───────────────────────────────────────────────────────
 echo.
 echo [3/4] Creating shortcuts...
-
-:: Resolve paths (handle spaces)
-set "INSTALL_DIR=%LOCALAPPDATA%\VPNSwitcher"
-set "SCRIPT=%INSTALL_DIR%\src\main.py"
-set "ICON=%INSTALL_DIR%\assets\logo_cuadrado.ico"
+set "SCRIPT=!INSTALL_DIR!\src\main.py"
+set "ICON=!INSTALL_DIR!\assets\logo_cuadrado.ico"
 set "DESKTOP=%USERPROFILE%\Desktop"
 
-:: Find pythonw.exe via sys.prefix (works even when launched via py.exe launcher)
-for /f "tokens=*" %%p in ('python -c "import sys,os; print(os.path.join(sys.prefix,'pythonw.exe'))"') do set "PYTHONW=%%p"
-
-if not exist "%PYTHONW%" (
-    for /f "tokens=*" %%p in ('python -c "import sys,os; print(os.path.join(sys.prefix,'python.exe'))"') do set "PYTHONW=%%p"
+:: Find pythonw.exe via a temp file (avoids cmd quoting issues with accented paths)
+set "PYPATH_TMP=%TEMP%\vpnsw_pypath.txt"
+python -c "import sys,os; print(os.path.join(sys.prefix,'pythonw.exe'))" > "!PYPATH_TMP!" 2>nul
+set /p PYTHONW=<"!PYPATH_TMP!"
+del /f /q "!PYPATH_TMP!" >nul 2>&1
+if not exist "!PYTHONW!" (
+    python -c "import sys,os; print(os.path.join(sys.prefix,'python.exe'))" > "!PYPATH_TMP!" 2>nul
+    set /p PYTHONW=<"!PYPATH_TMP!"
+    del /f /q "!PYPATH_TMP!" >nul 2>&1
+)
+if not exist "!PYTHONW!" (
+    echo [ERROR] Could not locate pythonw.exe or python.exe in Python install.
+    pause & exit /b 1
 )
 
-:: Desktop shortcut via PowerShell (single line to avoid ^ passthrough issues)
-powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.CreateShortcut('%DESKTOP%\VPN Switcher.lnk'); $s.TargetPath='%PYTHONW%'; $s.Arguments='\"%SCRIPT%\"'; $s.WorkingDirectory='%INSTALL_DIR%'; $s.IconLocation='%ICON%'; $s.Description='VPN Switcher'; $s.Save()"
+powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.CreateShortcut('!DESKTOP!\VPN Switcher.lnk'); $s.TargetPath='!PYTHONW!'; $s.Arguments='\"!SCRIPT!\"'; $s.WorkingDirectory='!INSTALL_DIR!'; $s.IconLocation='!ICON!'; $s.Description='VPN Switcher'; $s.Save()"
+if errorlevel 1 (
+    echo [WARN] Could not create desktop shortcut. App is still installed at !INSTALL_DIR!.
+) else (
+    echo [OK] Desktop shortcut created: !DESKTOP!\VPN Switcher.lnk
+)
 
-echo [OK] Desktop shortcut created: %DESKTOP%\VPN Switcher.lnk
-
-:: ── Done ──────────────────────────────────────────────────────────────────────
+:: ── Done ─────────────────────────────────────────────────────────────────────
 echo.
 echo [4/4] Setup complete!
 echo.
@@ -100,10 +142,10 @@ echo.
 echo   Desktop shortcut : VPN Switcher.lnk
 echo   Starts with Windows: yes (toggle off in Settings)
 echo   To uninstall     : run uninstall.bat
+echo   You can now delete this setup folder.
 echo ============================================================
 echo.
 
-:: Launch the app now
 echo Launching VPN Switcher...
-start "" "%PYTHONW%" "%SCRIPT%"
+start "" "!PYTHONW!" "!SCRIPT!"
 timeout /t 2 /nobreak >nul
