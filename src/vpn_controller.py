@@ -142,6 +142,21 @@ def _wait_and_bring_to_front(title_fragment: str, timeout: float = 12.0) -> bool
 FORTI_TITLE = "FortiClient - Zero Trust Fabric Agent"
 
 
+def _forti_dismiss_error_dialog():
+    """Auto-click OK on the Electron crash dialog FortiClient sometimes shows on launch."""
+    try:
+        import ctypes, ctypes.wintypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, "Error")
+        if hwnd:
+            # Find the OK button (control ID 2 = IDOK) and send a click
+            ok_hwnd = user32.FindWindowExW(hwnd, None, "Button", "OK")
+            if ok_hwnd:
+                user32.SendMessageW(ok_hwnd, 0x00F5, 0, 0)  # BM_CLICK
+    except Exception:
+        pass
+
+
 def _forti_get_window(timeout: float = 1.0):
     """Find the FortiClient Electron window via pywinauto UIA backend.
     Returns the window wrapper or None."""
@@ -149,6 +164,7 @@ def _forti_get_window(timeout: float = 1.0):
         from pywinauto import Desktop
         deadline = time.time() + timeout
         while time.time() < deadline:
+            _forti_dismiss_error_dialog()
             desktop = Desktop(backend="uia")
             wins = [w for w in desktop.windows()
                     if w.window_text() == FORTI_TITLE]
