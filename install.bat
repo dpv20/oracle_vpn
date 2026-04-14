@@ -3,14 +3,6 @@ setlocal EnableDelayedExpansion
 title VPN Switcher - Setup
 cd /d "%~dp0"
 
-:: ── 0. Auto-elevate to admin (needed for Python installer) ───────────────────
-net session >nul 2>&1
-if not errorlevel 1 goto :ADMIN_OK
-echo Requesting administrator privileges...
-powershell -NoProfile -Command "try { Start-Process -FilePath '%~f0' -Verb RunAs -ErrorAction Stop } catch { Write-Host ''; Write-Host 'ERROR: Administrator privileges are required to install Python.' -ForegroundColor Red; Write-Host 'Right-click install.bat and choose Run as administrator.' -ForegroundColor Yellow; Write-Host ''; pause }"
-exit /b 0
-:ADMIN_OK
-
 echo.
 echo ============================================================
 echo  VPN Switcher - Setup
@@ -49,7 +41,7 @@ if errorlevel 1 (
     if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
     pause & exit /b 1
 )
-"!PYTHON_INSTALLER!" /quiet InstallAllUsers=1 PrependPath=1 Include_pip=1
+"!PYTHON_INSTALLER!" /quiet InstallAllUsers=0 PrependPath=1 Include_pip=1
 set "PY_RC=!errorlevel!"
 if !PY_RC! neq 0 (
     echo [ERROR] Python installer failed with exit code !PY_RC!.
@@ -62,9 +54,9 @@ echo [OK] Python installed.
 :: PATH update won't apply to this cmd session. Find python.exe directly
 :: so the rest of the script works without requiring a restart.
 set "PY="
-if exist "%ProgramFiles%\Python312\python.exe"        set "PY=%ProgramFiles%\Python312\python.exe"
+if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+if not defined PY if exist "%ProgramFiles%\Python312\python.exe"        set "PY=%ProgramFiles%\Python312\python.exe"
 if not defined PY if exist "%ProgramFiles(x86)%\Python312\python.exe" set "PY=%ProgramFiles(x86)%\Python312\python.exe"
-if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 :: Last resort: py.exe launcher (always in C:\Windows after Python install)
 if not defined PY if exist "%SystemRoot%\py.exe" set "PY=%SystemRoot%\py.exe -3"
 if not defined PY (
@@ -162,4 +154,5 @@ echo.
 
 echo Launching VPN Switcher...
 start "" "!PYTHONW!" "!SCRIPT!"
-timeout /t 2 /nobreak >nul
+echo.
+pause
