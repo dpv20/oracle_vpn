@@ -35,7 +35,7 @@ pause & exit /b 1
 :INSTALL_PYTHON
 echo Python not found. Downloading and installing Python 3.12...
 set "PYTHON_INSTALLER=%TEMP%\python_setup_!RANDOM!!RANDOM!.exe"
-powershell -NoProfile -Command "try { Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe' -OutFile '!PYTHON_INSTALLER!' -UseBasicParsing } catch { Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }"
+powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.4/python-3.12.4-amd64.exe' -OutFile '!PYTHON_INSTALLER!' -UseBasicParsing } catch { Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }"
 if errorlevel 1 (
     echo [ERROR] Failed to download Python installer. Check internet connection / proxy / firewall.
     if exist "!PYTHON_INSTALLER!" del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
@@ -57,7 +57,8 @@ set "PY="
 if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
 if not defined PY if exist "%ProgramFiles%\Python312\python.exe"        set "PY=%ProgramFiles%\Python312\python.exe"
 if not defined PY if exist "%ProgramFiles(x86)%\Python312\python.exe" set "PY=%ProgramFiles(x86)%\Python312\python.exe"
-:: Last resort: py.exe launcher (always in C:\Windows after Python install)
+:: Last resort: py.exe launcher
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Launcher\py.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Launcher\py.exe -3"
 if not defined PY if exist "%SystemRoot%\py.exe" set "PY=%SystemRoot%\py.exe -3"
 if not defined PY (
     echo [ERROR] Python was installed but python.exe was not found in expected locations.
@@ -76,6 +77,11 @@ if "!APP_DIR:~-1!"=="\" set "APP_DIR=!APP_DIR:~0,-1!"
 set "INSTALL_DIR=%LOCALAPPDATA%\VPNSwitcher"
 if not exist "!INSTALL_DIR!" mkdir "!INSTALL_DIR!"
 
+:: Kill any running instance so robocopy can overwrite locked files
+taskkill /F /IM pythonw.exe /FI "WINDOWTITLE eq VPN Switcher" >nul 2>&1
+taskkill /F /IM python.exe  /FI "WINDOWTITLE eq VPN Switcher" >nul 2>&1
+timeout /t 1 /nobreak >nul
+
 robocopy "!APP_DIR!\src" "!INSTALL_DIR!\src" /e /copy:DAT /r:2 /w:5 >nul
 if !errorlevel! geq 8 (
     echo [ERROR] Failed to copy src/ to !INSTALL_DIR!.
@@ -91,11 +97,7 @@ echo [OK] Application files copied to !INSTALL_DIR!.
 :: ── 3. Install pip dependencies ──────────────────────────────────────────────
 echo.
 echo [2/4] Installing dependencies (this may take a minute)...
-set "PIP_LOG=%TEMP%\vpnswitcher_pip.log"
-!PY! -m pip install --upgrade pip > "!PIP_LOG!" 2>&1
-if errorlevel 1 (
-    echo [WARN] pip upgrade failed, continuing with bundled version...
-)
+set "PIP_LOG=%TEMP%\vpnswitcher_pip_install.log"
 !PY! -m pip install -r "!APP_DIR!\requirements.txt" > "!PIP_LOG!" 2>&1
 if errorlevel 1 (
     echo.
@@ -114,7 +116,14 @@ echo.
 echo [3/4] Creating shortcuts...
 set "SCRIPT=!INSTALL_DIR!\src\main.py"
 set "ICON=!INSTALL_DIR!\assets\logo_cuadrado.ico"
-set "DESKTOP=%USERPROFILE%\Desktop"
+
+:: Resolve real Desktop path (handles OneDrive / corporate GPO redirection)
+set "DESK_TMP=%TEMP%\vpnsw_desktop.txt"
+powershell -NoProfile -Command "[Environment]::GetFolderPath('Desktop')" > "!DESK_TMP!" 2>nul
+set /p DESKTOP=<"!DESK_TMP!"
+del /f /q "!DESK_TMP!" >nul 2>&1
+if not defined DESKTOP set "DESKTOP=%USERPROFILE%\Desktop"
+if not exist "!DESKTOP!" set "DESKTOP=%USERPROFILE%\Desktop"
 
 :: Find pythonw.exe via a temp file (avoids cmd quoting issues with accented paths)
 set "PYPATH_TMP=%TEMP%\vpnsw_pypath.txt"
