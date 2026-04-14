@@ -2,8 +2,8 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-APPDATA = os.getenv("APPDATA", os.path.expanduser("~"))
-LOG_DIR = os.path.join(APPDATA, "VPNSwitcher")
+LOCALAPPDATA = os.getenv("LOCALAPPDATA", os.path.expanduser("~"))
+LOG_DIR = os.path.join(LOCALAPPDATA, "VPNSwitcher", "assets")
 LOG_FILE = os.path.join(LOG_DIR, "vpnswitcher.log")
 
 _logger = None
