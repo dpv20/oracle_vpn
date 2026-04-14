@@ -4,6 +4,8 @@ import threading
 import time
 from typing import Optional, Tuple
 
+from logger import get_logger
+
 # Global cancellation flag — set to cancel any in-progress autofill
 _autofill_cancel = threading.Event()
 
@@ -711,6 +713,7 @@ def _forti_click_button(win, button_texts, timeout: float = 5.0) -> bool:
     if isinstance(button_texts, str):
         button_texts = [button_texts]
     keywords = [t.lower() for t in button_texts]
+    log = get_logger()
     try:
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -719,13 +722,15 @@ def _forti_click_button(win, button_texts, timeout: float = 5.0) -> bool:
                     if ctrl.element_info.control_type == "Button":
                         ctrl_text = ctrl.window_text().lower()
                         if any(kw in ctrl_text for kw in keywords):
+                            log.info(f"FortiClient: clicking button '{ctrl.window_text()}'")
                             ctrl.click()
                             return True
                 except Exception:
                     pass
             time.sleep(0.5)
-    except Exception:
-        pass
+    except Exception as e:
+        log.error(f"FortiClient: _forti_click_button error: {e}")
+    log.warning(f"FortiClient: button not found (candidates: {button_texts})")
     return False
 
 
@@ -824,6 +829,8 @@ class VPNController:
     # ── Cisco connect / disconnect ────────────────────────────────────────────
 
     def connect_cisco(self) -> Tuple[bool, str]:
+        log = get_logger()
+        log.info("connect_cisco: attempt started")
         host = self.config.get("cisco_host", "").strip()
         username = self.config.get("cisco_username", "").strip()
         password = self.config.get("cisco_password", "").strip()
@@ -832,22 +839,26 @@ class VPNController:
         if host and username and password:
             cli = _find_exe(CISCO_CLI_CANDIDATES, self.config.get("cisco_cli_path", ""))
             if cli:
+                log.info(f"connect_cisco: trying CLI ({cli}) → {host}")
                 stdin_data = f"{username}\n{password}\ny\n"
                 rc, out, err = _run([cli, "-s", "connect", host],
                                     input_text=stdin_data, timeout=40)
                 combined = (out + err).lower()
                 if "state: connected" in combined and "disconnected" not in combined:
+                    log.info("connect_cisco: CLI connected")
                     return True, "Connected to Cisco Secure Client."
-                # If CLI fails (e.g. "another application acquired it"), fall through to GUI
+                log.warning(f"connect_cisco: CLI did not connect (rc={rc}), falling back to GUI")
 
         # Open the Cisco Secure Client GUI, bring it to front, and click Connect
         ui = _find_exe(CISCO_UI_CANDIDATES)
         if ui:
+            log.info("connect_cisco: opening GUI and clicking Connect")
             if not _bring_window_to_front("Cisco Secure Client"):
                 _open_gui(ui)
             _cisco_click_connect()
             return True, "Connecting via Cisco Secure Client…"
 
+        log.error("connect_cisco: Cisco Secure Client not found")
         return False, "Cisco Secure Client not found on this PC."
 
     def disconnect_cisco(self) -> Tuple[bool, str]:
@@ -863,13 +874,18 @@ class VPNController:
     # ── FortiClient connect / disconnect ──────────────────────────────────────
 
     def connect_forti(self) -> Tuple[bool, str]:
+        log = get_logger()
+        log.info("connect_forti: attempt started")
+
         # 1. Custom command
         cmd = self.config.get("forti_connect_cmd", "").strip()
         if cmd:
             try:
                 subprocess.Popen(cmd, shell=True)
+                log.info("connect_forti: custom command sent")
                 return True, "FortiClient connect command sent."
             except Exception as e:
+                log.error(f"connect_forti: custom command failed: {e}")
                 return False, f"FortiClient custom command failed: {e}"
 
         # 2. Try to find and focus the FortiClient window (launch if needed)
@@ -878,11 +894,14 @@ class VPNController:
             # Launch via explorer and wait
             forti_exe = _find_exe(FORTI_EXE_CANDIDATES, self.config.get("forti_exe_path", ""))
             if not forti_exe:
+                log.error("connect_forti: FortiClient exe not found")
                 return False, "FortiClient not found. Set the path in Settings."
+            log.info(f"connect_forti: launching {forti_exe}")
             _open_gui(forti_exe)
             win = _forti_get_window(timeout=10)
 
         if win:
+            log.info("connect_forti: FortiClient window found")
             try:
                 win.set_focus()
             except Exception:
@@ -897,16 +916,19 @@ class VPNController:
                 flow_mode  = self.config.get("forti_flow_mode", "detect")
                 flow_steps = self.config.get("forti_flow_steps",
                                              ["username", "password", "mfa"])
+                log.info(f"connect_forti: autofill starting (mode={flow_mode})")
                 if flow_mode == "custom":
                     result = _forti_autofill_custom_flow(username, password, flow_steps)
                 else:
                     result = _forti_autofill_signin(username, password)
+                log.info(f"connect_forti: autofill result={result}")
                 if result == "wrong_password":
                     return False, "__WRONG_PASSWORD__"
                 return True, "Credentials submitted — approve MFA if prompted."
 
             return True, "Connecting via FortiClient…"
 
+        log.error("connect_forti: window did not appear after launch")
         return False, "FortiClient launched but window did not appear. Try again."
 
     def disconnect_forti(self) -> Tuple[bool, str]:
