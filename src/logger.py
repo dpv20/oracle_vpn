@@ -2,9 +2,10 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-LOCALAPPDATA = os.getenv("LOCALAPPDATA", os.path.expanduser("~"))
-LOG_DIR = os.path.join(LOCALAPPDATA, "VPNSwitcher", "assets")
-LOG_FILE = os.path.join(LOG_DIR, "vpnswitcher.log")
+from utils import asset_path
+
+LOG_DIR = asset_path()          # resolves to <project>/assets/ or installed assets/
+LOG_FILE = asset_path("vpnswitcher.log")
 
 _logger = None
 
