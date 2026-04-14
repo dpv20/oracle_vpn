@@ -18,6 +18,8 @@ echo ============================================================
 echo.
 
 :: ── 1. Check / install Python ────────────────────────────────────────────────
+:: PY = command/path used to invoke Python for the rest of this script.
+set "PY=python"
 python --version >nul 2>&1
 if errorlevel 1 goto :INSTALL_PYTHON
 
@@ -55,10 +57,22 @@ if !PY_RC! neq 0 (
     pause & exit /b 1
 )
 del /f /q "!PYTHON_INSTALLER!" >nul 2>&1
-echo.
-echo [OK] Python installed successfully.
-echo IMPORTANT: Close this window and run install.bat again.
-pause & exit /b 0
+echo [OK] Python installed.
+
+:: PATH update won't apply to this cmd session. Find python.exe directly
+:: so the rest of the script works without requiring a restart.
+set "PY="
+if exist "%ProgramFiles%\Python312\python.exe"        set "PY=%ProgramFiles%\Python312\python.exe"
+if not defined PY if exist "%ProgramFiles(x86)%\Python312\python.exe" set "PY=%ProgramFiles(x86)%\Python312\python.exe"
+if not defined PY if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+:: Last resort: py.exe launcher (always in C:\Windows after Python install)
+if not defined PY if exist "%SystemRoot%\py.exe" set "PY=%SystemRoot%\py.exe -3"
+if not defined PY (
+    echo [ERROR] Python was installed but python.exe was not found in expected locations.
+    echo Please close this window and run install.bat again.
+    pause & exit /b 1
+)
+echo [OK] Using Python at: !PY!
 
 :AFTER_PYTHON
 
@@ -86,11 +100,11 @@ echo [OK] Application files copied to !INSTALL_DIR!.
 echo.
 echo [2/4] Installing dependencies (this may take a minute)...
 set "PIP_LOG=%TEMP%\vpnswitcher_pip.log"
-python -m pip install --upgrade pip > "!PIP_LOG!" 2>&1
+!PY! -m pip install --upgrade pip > "!PIP_LOG!" 2>&1
 if errorlevel 1 (
     echo [WARN] pip upgrade failed, continuing with bundled version...
 )
-python -m pip install -r "!APP_DIR!\requirements.txt" > "!PIP_LOG!" 2>&1
+!PY! -m pip install -r "!APP_DIR!\requirements.txt" > "!PIP_LOG!" 2>&1
 if errorlevel 1 (
     echo.
     echo [ERROR] Failed to install dependencies. Details:
@@ -112,11 +126,11 @@ set "DESKTOP=%USERPROFILE%\Desktop"
 
 :: Find pythonw.exe via a temp file (avoids cmd quoting issues with accented paths)
 set "PYPATH_TMP=%TEMP%\vpnsw_pypath.txt"
-python -c "import sys,os; print(os.path.join(sys.prefix,'pythonw.exe'))" > "!PYPATH_TMP!" 2>nul
+!PY! -c "import sys,os; print(os.path.join(sys.prefix,'pythonw.exe'))" > "!PYPATH_TMP!" 2>nul
 set /p PYTHONW=<"!PYPATH_TMP!"
 del /f /q "!PYPATH_TMP!" >nul 2>&1
 if not exist "!PYTHONW!" (
-    python -c "import sys,os; print(os.path.join(sys.prefix,'python.exe'))" > "!PYPATH_TMP!" 2>nul
+    !PY! -c "import sys,os; print(os.path.join(sys.prefix,'python.exe'))" > "!PYPATH_TMP!" 2>nul
     set /p PYTHONW=<"!PYPATH_TMP!"
     del /f /q "!PYPATH_TMP!" >nul 2>&1
 )
