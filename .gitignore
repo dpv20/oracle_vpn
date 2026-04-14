@@ -25,3 +25,7 @@ env/
 # User config (each user has their own in %APPDATA%)
 config.json
 assets/SESSION_CONTEXT.txt
+
+# Log file (written to %LOCALAPPDATA%\VPNSwitcher\assets\ at runtime)
+assets/vpnswitcher.log
+*.log
