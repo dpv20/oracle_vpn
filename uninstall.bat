@@ -17,6 +17,12 @@ if exist "%USERPROFILE%\Desktop\VPN Switcher.lnk" (
     echo [OK] Desktop shortcut removed.
 )
 
+:: Remove installed app data folder
+if exist "%LOCALAPPDATA%\VPNSwitcher" (
+    rmdir /s /q "%LOCALAPPDATA%\VPNSwitcher"
+    echo [OK] Removed %LOCALAPPDATA%\VPNSwitcher.
+)
+
 echo.
 echo VPN Switcher uninstalled.
 echo You can now delete this folder.
