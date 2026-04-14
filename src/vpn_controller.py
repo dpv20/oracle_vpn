@@ -871,7 +871,7 @@ class VPNController:
                 win.set_focus()
             except Exception:
                 pass
-            _forti_click_button(win, ["Connect", "Conectar"])
+            _forti_click_button(win, ["Connect", "Conectar", "SAML Login"])
 
             # Auto-fill sign-in credentials if saved
             from config_manager import decrypt_password
