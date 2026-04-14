@@ -24,3 +24,4 @@ env/
 
 # User config (each user has their own in %APPDATA%)
 config.json
+assets/SESSION_CONTEXT.txt
