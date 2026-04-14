@@ -42,13 +42,13 @@ set "APP_DIR=%~dp0"
 if "%APP_DIR:~-1%"=="\" set "APP_DIR=%APP_DIR:~0,-1%"
 set "INSTALL_DIR=%LOCALAPPDATA%\VPNSwitcher"
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-robocopy "%APP_DIR%\src" "%INSTALL_DIR%\src" /e /copyall /r:2 /w:5 >nul
+robocopy "%APP_DIR%\src" "%INSTALL_DIR%\src" /e /copy:DAT /r:2 /w:5 >nul
 set "RC=%ERRORLEVEL%"
 if %RC% geq 8 (
     echo [ERROR] Failed to copy application files to %INSTALL_DIR%.
     pause & exit /b 1
 )
-robocopy "%APP_DIR%\assets" "%INSTALL_DIR%\assets" /e /copyall /r:2 /w:5 >nul
+robocopy "%APP_DIR%\assets" "%INSTALL_DIR%\assets" /e /copy:DAT /r:2 /w:5 >nul
 set "RC=%ERRORLEVEL%"
 if %RC% geq 8 (
     echo [ERROR] Failed to copy application files to %INSTALL_DIR%.
