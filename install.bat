@@ -69,36 +69,97 @@ echo [OK] Using Python at: !PY!
 
 :AFTER_PYTHON
 
-:: ── 2. Copy app files to LOCALAPPDATA ────────────────────────────────────────
+:: ── 2. Check / install Git ───────────────────────────────────────────────────
+:: GIT = command/path used to invoke git for the rest of this script.
+set "GIT="
+where git >nul 2>&1
+if not errorlevel 1 (
+    for /f "delims=" %%g in ('where git') do (
+        if not defined GIT set "GIT=%%g"
+    )
+    echo [OK] Git found at !GIT!.
+    goto :AFTER_GIT
+)
+
+echo Git not found. Downloading and installing Git (per-user, no admin)...
+set "GIT_INSTALLER=%TEMP%\git_setup_!RANDOM!!RANDOM!.exe"
+powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe' -OutFile '!GIT_INSTALLER!' -UseBasicParsing } catch { Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }"
+if errorlevel 1 (
+    echo [ERROR] Failed to download Git installer. Check internet connection / proxy / firewall.
+    if exist "!GIT_INSTALLER!" del /f /q "!GIT_INSTALLER!" >nul 2>&1
+    pause & exit /b 1
+)
+
+:: Per-user silent install — no UAC. PathOption=CmdTools adds Git to user PATH.
+"!GIT_INSTALLER!" /VERYSILENT /NORESTART /SP- /CLOSEAPPLICATIONS /NOCANCEL /COMPONENTS="icons,ext\reg\shellhere,assoc,assoc_sh" /o:PathOption=CmdTools /o:BashTerminalOption=ConHost /o:DefaultBranchOption=main
+set "GIT_RC=!errorlevel!"
+if !GIT_RC! neq 0 (
+    echo [ERROR] Git installer failed with exit code !GIT_RC!.
+    if exist "!GIT_INSTALLER!" del /f /q "!GIT_INSTALLER!" >nul 2>&1
+    pause & exit /b 1
+)
+del /f /q "!GIT_INSTALLER!" >nul 2>&1
+echo [OK] Git installed.
+
+:: PATH won't refresh in this cmd session; locate git.exe directly.
+if exist "%LOCALAPPDATA%\Programs\Git\cmd\git.exe"    set "GIT=%LOCALAPPDATA%\Programs\Git\cmd\git.exe"
+if not defined GIT if exist "%ProgramFiles%\Git\cmd\git.exe"       set "GIT=%ProgramFiles%\Git\cmd\git.exe"
+if not defined GIT if exist "%ProgramFiles(x86)%\Git\cmd\git.exe" set "GIT=%ProgramFiles(x86)%\Git\cmd\git.exe"
+if not defined GIT (
+    echo [ERROR] Git was installed but git.exe was not found in expected locations.
+    echo Please close this window and run install.bat again.
+    pause & exit /b 1
+)
+echo [OK] Using Git at: !GIT!
+
+:AFTER_GIT
+
+:: ── 3. Clone / update repo in LOCALAPPDATA ──────────────────────────────────
 echo.
-echo [1/4] Installing application files...
+echo [1/4] Fetching application files from GitHub...
 set "APP_DIR=%~dp0"
 if "!APP_DIR:~-1!"=="\" set "APP_DIR=!APP_DIR:~0,-1!"
 set "INSTALL_DIR=%LOCALAPPDATA%\VPNSwitcher"
+set "REPO_DIR=!INSTALL_DIR!\app"
+set "REPO_URL=https://github.com/dpv20/oracle_vpn.git"
+
 if not exist "!INSTALL_DIR!" mkdir "!INSTALL_DIR!"
 
-:: Kill any running instance so robocopy can overwrite locked files
+:: Kill any running instance so git can overwrite files.
 taskkill /F /IM pythonw.exe /FI "WINDOWTITLE eq VPN Switcher" >nul 2>&1
 taskkill /F /IM python.exe  /FI "WINDOWTITLE eq VPN Switcher" >nul 2>&1
 timeout /t 1 /nobreak >nul
 
-robocopy "!APP_DIR!\src" "!INSTALL_DIR!\src" /e /copy:DAT /r:2 /w:5 >nul
-if !errorlevel! geq 8 (
-    echo [ERROR] Failed to copy src/ to !INSTALL_DIR!.
-    pause & exit /b 1
+if exist "!REPO_DIR!\.git" (
+    echo Repo already cloned. Updating to latest main...
+    "!GIT!" -C "!REPO_DIR!" fetch origin main
+    if errorlevel 1 (
+        echo [ERROR] git fetch failed. Check internet / firewall / proxy.
+        pause & exit /b 1
+    )
+    "!GIT!" -C "!REPO_DIR!" reset --hard origin/main
+    if errorlevel 1 (
+        echo [ERROR] git reset --hard failed.
+        pause & exit /b 1
+    )
+) else (
+    if exist "!REPO_DIR!" rmdir /s /q "!REPO_DIR!"
+    "!GIT!" clone --depth 1 --branch main "!REPO_URL!" "!REPO_DIR!"
+    if errorlevel 1 (
+        echo [ERROR] git clone failed. Check internet / firewall / proxy.
+        echo Repo URL: !REPO_URL!
+        pause & exit /b 1
+    )
+    :: Unshallow so future fetches can compare commits cleanly.
+    "!GIT!" -C "!REPO_DIR!" fetch --unshallow origin main >nul 2>&1
 )
-robocopy "!APP_DIR!\assets" "!INSTALL_DIR!\assets" /e /copy:DAT /r:2 /w:5 >nul
-if !errorlevel! geq 8 (
-    echo [ERROR] Failed to copy assets/ to !INSTALL_DIR!.
-    pause & exit /b 1
-)
-echo [OK] Application files copied to !INSTALL_DIR!.
+echo [OK] Repo ready at !REPO_DIR!.
 
-:: ── 3. Install pip dependencies ──────────────────────────────────────────────
+:: ── 4. Install pip dependencies ──────────────────────────────────────────────
 echo.
 echo [2/4] Installing dependencies (this may take a minute)...
 set "PIP_LOG=%TEMP%\vpnswitcher_pip_install.log"
-!PY! -m pip install -r "!APP_DIR!\requirements.txt" > "!PIP_LOG!" 2>&1
+!PY! -m pip install -r "!REPO_DIR!\requirements.txt" > "!PIP_LOG!" 2>&1
 if errorlevel 1 (
     echo.
     echo [ERROR] Failed to install dependencies. Details:
@@ -111,11 +172,11 @@ if errorlevel 1 (
 del /f /q "!PIP_LOG!" >nul 2>&1
 echo [OK] Dependencies installed.
 
-:: ── 4. Create shortcut ───────────────────────────────────────────────────────
+:: ── 5. Create shortcut ───────────────────────────────────────────────────────
 echo.
-echo [3/4] Creating shortcuts...
-set "SCRIPT=!INSTALL_DIR!\src\main.py"
-set "ICON=!INSTALL_DIR!\assets\logo_cuadrado.ico"
+echo [3/4] Creating shortcut...
+set "SCRIPT=!REPO_DIR!\src\main.py"
+set "ICON=!REPO_DIR!\assets\logo_cuadrado.ico"
 
 :: Resolve real Desktop path (handles OneDrive / corporate GPO redirection)
 set "DESK_TMP=%TEMP%\vpnsw_desktop.txt"
@@ -140,11 +201,18 @@ if not exist "!PYTHONW!" (
     pause & exit /b 1
 )
 
-powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.CreateShortcut('!DESKTOP!\VPN Switcher.lnk'); $s.TargetPath='!PYTHONW!'; $s.Arguments='\"!SCRIPT!\"'; $s.WorkingDirectory='!INSTALL_DIR!'; $s.IconLocation='!ICON!'; $s.Description='VPN Switcher'; $s.Save()"
+set "LNK_PATH=!DESKTOP!\VPN Switcher.lnk"
+powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.CreateShortcut('!LNK_PATH!'); $s.TargetPath='!PYTHONW!'; $s.Arguments='\"!SCRIPT!\"'; $s.WorkingDirectory='!REPO_DIR!'; $s.IconLocation='!ICON!'; $s.Description='VPN Switcher'; $s.Save()"
 if errorlevel 1 (
-    echo [WARN] Could not create desktop shortcut. App is still installed at !INSTALL_DIR!.
+    echo [WARN] Could not create desktop shortcut. App is still installed at !REPO_DIR!.
 ) else (
-    echo [OK] Desktop shortcut created: !DESKTOP!\VPN Switcher.lnk
+    echo [OK] Desktop shortcut created: !LNK_PATH!
+    powershell -NoProfile -ExecutionPolicy Bypass -File "!REPO_DIR!\tools\set_aumid.ps1" -LnkPath "!LNK_PATH!" -AUMID "Oracle.VPNSwitcher.1" >nul 2>&1
+    if errorlevel 1 (
+        echo [WARN] Could not set AppUserModelID on shortcut; taskbar pin may show Python icon.
+    ) else (
+        echo [OK] Shortcut AppUserModelID set.
+    )
 )
 
 :: ── Done ─────────────────────────────────────────────────────────────────────
@@ -154,9 +222,11 @@ echo.
 echo ============================================================
 echo  VPN Switcher is ready!
 echo.
-echo   Desktop shortcut : VPN Switcher.lnk
+echo   Desktop shortcut  : VPN Switcher.lnk
+echo   Installed at      : !REPO_DIR!
+echo   Auto-update       : enabled (git pull on new version)
 echo   Starts with Windows: yes (toggle off in Settings)
-echo   To uninstall     : run uninstall.bat
+echo   To uninstall      : run uninstall.bat
 echo   You can now delete this setup folder.
 echo ============================================================
 echo.

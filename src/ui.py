@@ -475,7 +475,7 @@ class VPNSwitcherApp:
             font=("Segoe UI", 8, "underline"), cursor="hand2"
         )
         self._update_lbl.grid(row=4, column=0, pady=(4, 0))
-        self._update_lbl.bind("<Button-1>", self._open_update_url)
+        self._update_lbl.bind("<Button-1>", self._install_update)
 
         # ── message area ──────────────────────────────────────────────────────
         self._msg_lbl = tk.Label(root, text="", bg=BG, fg=MUTED,
@@ -862,35 +862,96 @@ class VPNSwitcherApp:
     # ── auto-update check ──────────────────────────────────────────────────────
 
     def _check_for_update(self):
-        """Background thread: compare installed version with GitHub version.json."""
+        """Background thread: compare installed version with origin/main via git."""
         try:
-            import json
-            import urllib.request
+            import os
+            import re
+            import subprocess
             from version import __version__
 
-            url = ("https://raw.githubusercontent.com/dpv20/oracle_vpn"
-                   "/main/assets/version.json")
-            with urllib.request.urlopen(url, timeout=6) as resp:
-                data = json.loads(resp.read())
+            repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+            if not os.path.isdir(os.path.join(repo_dir, ".git")):
+                return  # Not a git-based install — skip silently.
 
-            latest = data.get("version", "")
-            download_url = data.get("download_url", "https://github.com/dpv20/oracle_vpn/releases/latest")
+            git = self._find_git()
+            if not git:
+                return
+
+            no_window = 0x08000000  # CREATE_NO_WINDOW
+
+            subprocess.run(
+                [git, "-C", repo_dir, "fetch", "origin", "main"],
+                check=True, capture_output=True, timeout=20,
+                creationflags=no_window,
+            )
+
+            result = subprocess.run(
+                [git, "-C", repo_dir, "show", "origin/main:src/version.py"],
+                check=True, capture_output=True, timeout=10,
+                creationflags=no_window,
+            )
+            remote_src = result.stdout.decode("utf-8", errors="ignore")
+            m = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', remote_src)
+            if not m:
+                return
+            latest = m.group(1)
 
             def _ver(v):
                 return tuple(int(x) for x in v.split("."))
 
-            if latest and _ver(latest) > _ver(__version__):
-                self._update_url = download_url
+            if _ver(latest) > _ver(__version__):
                 self.root.after(0, lambda: self._update_lbl.configure(
-                    text=f"⬆  Update available v{latest} — click to download"
+                    text=f"⬆  Update available v{latest} — click to install"
                 ))
         except Exception:
-            pass  # No internet or rate-limited — silently ignore
+            pass  # Network/git issue — silently ignore
 
-    def _open_update_url(self, *_):
+    @staticmethod
+    def _find_git():
+        """Return a usable git.exe path, or None if git isn't available."""
+        import os
+        import shutil
+        found = shutil.which("git")
+        if found:
+            return found
+        for candidate in (
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Git\cmd\git.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Git\cmd\git.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Git\cmd\git.exe"),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def _install_update(self, *_):
+        """Launch update.bat and exit so git can replace files."""
+        import os
+        import subprocess
         import webbrowser
-        webbrowser.open(getattr(self, "_update_url",
-                                "https://github.com/dpv20/oracle_vpn/releases/latest"))
+
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        updater = os.path.join(repo_dir, "update.bat")
+        if not os.path.isfile(updater):
+            # Fallback to manual download page for non-git installs.
+            webbrowser.open("https://github.com/dpv20/oracle_vpn/releases/latest")
+            return
+
+        pythonw = sys.executable
+        if pythonw.lower().endswith("python.exe"):
+            candidate = pythonw[:-len("python.exe")] + "pythonw.exe"
+            if os.path.isfile(candidate):
+                pythonw = candidate
+
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", updater, pythonw],
+                cwd=repo_dir,
+                creationflags=0x00000010,  # CREATE_NEW_CONSOLE
+            )
+        except Exception:
+            return
+        self.root.after(100, lambda: self.root.destroy())
+        sys.exit(0)
 
     # ── helpers ────────────────────────────────────────────────────────────────
 
