@@ -1005,6 +1005,26 @@ class VPNController:
             if not forti_exe:
                 log.error("connect_forti: FortiClient exe not found")
                 return False, "FortiClient not found. Set the path in Settings."
+
+            # Kill zombie FortiClient.exe processes from previous failed launches.
+            # Each crashed launch leaves orphaned processes that accumulate and
+            # block fresh window creation. Service processes (FortiTray, FortiVPN,
+            # FortiSSLVPNdaemon, FortiSettings) are preserved.
+            try:
+                import psutil
+                killed = 0
+                for p in psutil.process_iter(["pid", "name"]):
+                    try:
+                        if (p.info.get("name") or "").lower() == "forticlient.exe":
+                            p.kill()
+                            killed += 1
+                    except Exception:
+                        pass
+                log.info(f"connect_forti: killed {killed} zombie FortiClient.exe processes")
+                time.sleep(2)
+            except Exception as e:
+                log.warning(f"connect_forti: zombie cleanup failed: {e}")
+
             log.info(f"connect_forti: launching {forti_exe}")
             _open_gui(forti_exe)
             win = _forti_get_window(timeout=12)
