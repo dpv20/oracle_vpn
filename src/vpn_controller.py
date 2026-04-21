@@ -64,11 +64,35 @@ def _run(cmd, input_text=None, timeout=20) -> Tuple[int, str, str]:
 
 
 def _open_gui(exe_path: str) -> bool:
-    """Open a GUI application via explorer.exe (works for protected/Electron apps)."""
+    """Open a GUI application mimicking a shell double-click (explicit working dir)."""
+    log = get_logger()
+    try:
+        exists = os.path.exists(exe_path)
+        size = os.path.getsize(exe_path) if exists else -1
+        log.info(f"open_gui: exe={exe_path} exists={exists} size={size}")
+        log.info(f"open_gui: process_cwd={os.getcwd()}")
+    except Exception as e:
+        log.warning(f"open_gui: pre-launch probe failed: {e}")
+    try:
+        import ctypes
+        work_dir = os.path.dirname(exe_path)
+        log.info(f"open_gui: ShellExecuteW work_dir={work_dir}")
+        # SW_SHOWNORMAL = 1. ShellExecuteW returns >32 on success.
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None, "open", exe_path, None, work_dir, 1
+        )
+        log.info(f"open_gui: ShellExecuteW returned {result}")
+        if result > 32:
+            return True
+        log.warning(f"open_gui: ShellExecuteW failed (code<=32), falling back to explorer.exe")
+    except Exception as e:
+        log.warning(f"open_gui: ShellExecuteW exception: {e}")
     try:
         subprocess.Popen(["explorer.exe", exe_path])
+        log.info("open_gui: fallback explorer.exe launch issued")
         return True
-    except Exception:
+    except Exception as e:
+        log.error(f"open_gui: explorer.exe fallback failed: {e}")
         return False
 
 
@@ -216,6 +240,161 @@ def _forti_diagnostics():
             log.info("forti_diag: no forti/error windows found")
     except Exception as e:
         log.warning(f"forti_diag: window enum failed: {e}")
+
+    # --- FortiClient executable metadata ---
+    try:
+        forti_exe = _find_exe(FORTI_EXE_CANDIDATES, "")
+        if forti_exe:
+            exists = os.path.exists(forti_exe)
+            size = os.path.getsize(forti_exe) if exists else -1
+            log.info(f"forti_diag: forti_exe={forti_exe} exists={exists} size={size}")
+            # Version info via ctypes (no pywin32 dep)
+            try:
+                import ctypes
+                from ctypes import wintypes
+                ver = ctypes.windll.version
+                size_needed = ver.GetFileVersionInfoSizeW(forti_exe, None)
+                if size_needed:
+                    buf = ctypes.create_string_buffer(size_needed)
+                    if ver.GetFileVersionInfoW(forti_exe, 0, size_needed, buf):
+                        lplp = ctypes.c_void_p()
+                        u = ctypes.c_uint()
+                        if ver.VerQueryValueW(buf, "\\", ctypes.byref(lplp), ctypes.byref(u)):
+                            class FFI(ctypes.Structure):
+                                _fields_ = [
+                                    ("dwSignature", wintypes.DWORD),
+                                    ("dwStrucVersion", wintypes.DWORD),
+                                    ("dwFileVersionMS", wintypes.DWORD),
+                                    ("dwFileVersionLS", wintypes.DWORD),
+                                    ("dwProductVersionMS", wintypes.DWORD),
+                                    ("dwProductVersionLS", wintypes.DWORD),
+                                    ("dwFileFlagsMask", wintypes.DWORD),
+                                    ("dwFileFlags", wintypes.DWORD),
+                                    ("dwFileOS", wintypes.DWORD),
+                                    ("dwFileType", wintypes.DWORD),
+                                    ("dwFileSubtype", wintypes.DWORD),
+                                    ("dwFileDateMS", wintypes.DWORD),
+                                    ("dwFileDateLS", wintypes.DWORD),
+                                ]
+                            ffi = ctypes.cast(lplp, ctypes.POINTER(FFI)).contents
+                            v = (
+                                ffi.dwFileVersionMS >> 16,
+                                ffi.dwFileVersionMS & 0xFFFF,
+                                ffi.dwFileVersionLS >> 16,
+                                ffi.dwFileVersionLS & 0xFFFF,
+                            )
+                            log.info(f"forti_diag: forti_exe_version={'.'.join(map(str, v))}")
+            except Exception as e:
+                log.warning(f"forti_diag: version probe failed: {e}")
+            # Critical resource files
+            try:
+                folder = os.path.dirname(forti_exe)
+                resources = os.path.join(folder, "resources")
+                asar = os.path.join(resources, "app.asar")
+                log.info(
+                    f"forti_diag: resources_dir exists={os.path.isdir(resources)} "
+                    f"app.asar exists={os.path.isfile(asar)} "
+                    f"app.asar size={os.path.getsize(asar) if os.path.isfile(asar) else -1}"
+                )
+            except Exception as e:
+                log.warning(f"forti_diag: resource probe failed: {e}")
+        else:
+            log.info("forti_diag: forti_exe not found in any candidate path")
+    except Exception as e:
+        log.warning(f"forti_diag: exe metadata failed: {e}")
+
+    # --- VC++ Redistributables (root cause candidate for JS TraceLog crash) ---
+    try:
+        import winreg
+        vc_keys = [
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x86"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\x86"),
+        ]
+        found_any = False
+        for root, path in vc_keys:
+            try:
+                with winreg.OpenKey(root, path) as k:
+                    ver_val = winreg.QueryValueEx(k, "Version")[0]
+                    installed = winreg.QueryValueEx(k, "Installed")[0]
+                    log.info(f"forti_diag: VC++ {path} Version={ver_val} Installed={installed}")
+                    found_any = True
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                log.warning(f"forti_diag: VC++ probe {path} failed: {e}")
+        if not found_any:
+            log.warning("forti_diag: NO VC++ 2015-2022 runtime keys found in registry")
+    except Exception as e:
+        log.warning(f"forti_diag: VC++ enum failed: {e}")
+
+    # --- Recent Application Error events for FortiClient ---
+    try:
+        cmd = [
+            "wevtutil", "qe", "Application",
+            "/q:*[System[Provider[@Name='Application Error'] and TimeCreated[timediff(@SystemTime) <= 600000]]]",
+            "/c:5", "/rd:true", "/f:text",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                          creationflags=0x08000000)
+        out = (r.stdout or "").strip()
+        if out:
+            # Just log FortiClient-related snippets (keep log size sane)
+            lines = out.splitlines()
+            forti_lines = [l for l in lines if "forti" in l.lower()]
+            if forti_lines:
+                for l in forti_lines[:10]:
+                    log.info(f"forti_diag: evtlog: {l.strip()}")
+            else:
+                log.info("forti_diag: evtlog: no recent FortiClient Application Errors")
+        else:
+            log.info("forti_diag: evtlog: no recent Application Errors")
+    except Exception as e:
+        log.warning(f"forti_diag: event log query failed: {e}")
+
+
+def _forti_monitor_processes(seconds: int = 10):
+    """Sample FortiClient.exe PIDs over `seconds` and log which ones die + exit codes."""
+    log = get_logger()
+    try:
+        import psutil, ctypes
+        kernel32 = ctypes.windll.kernel32
+        start_pids = {}
+        for p in psutil.process_iter(["pid", "name"]):
+            try:
+                if (p.info.get("name") or "").lower() == "forticlient.exe":
+                    start_pids[p.info["pid"]] = p
+            except Exception:
+                pass
+        log.info(f"forti_monitor: initial FortiClient.exe PIDs={list(start_pids.keys())}")
+        time.sleep(seconds)
+        still_alive = []
+        died = []
+        for pid, p in start_pids.items():
+            try:
+                if p.is_running() and p.status() != psutil.STATUS_ZOMBIE:
+                    still_alive.append(pid)
+                else:
+                    died.append(pid)
+            except Exception:
+                died.append(pid)
+        # Try to get exit codes for dead ones
+        exit_codes = {}
+        for pid in died:
+            try:
+                PROCESS_QUERY_LIMITED = 0x1000
+                h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED, False, pid)
+                if h:
+                    code = ctypes.c_ulong()
+                    kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+                    exit_codes[pid] = code.value
+                    kernel32.CloseHandle(h)
+            except Exception:
+                pass
+        log.info(f"forti_monitor: after {seconds}s alive={still_alive} died={died} exit_codes={exit_codes}")
+    except Exception as e:
+        log.warning(f"forti_monitor: failed: {e}")
 
 
 def _forti_restore_tray_window() -> bool:
@@ -1033,6 +1212,7 @@ class VPNController:
                 log.warning(f"connect_forti: window not found after launch, dismissed_dialog={dismissed}")
                 log.info("connect_forti: diagnostics after failed launch:")
                 _forti_diagnostics()
+                _forti_monitor_processes(seconds=10)
 
         if win:
             log.info("connect_forti: FortiClient window found")
