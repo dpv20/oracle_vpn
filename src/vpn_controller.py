@@ -144,19 +144,26 @@ def _wait_and_bring_to_front(title_fragment: str, timeout: float = 12.0) -> bool
 FORTI_TITLE = "FortiClient - Zero Trust Fabric Agent"
 
 
-def _forti_dismiss_error_dialog():
-    """Auto-click OK on the Electron crash dialog FortiClient sometimes shows on launch."""
+def _forti_dismiss_error_dialog() -> bool:
+    """Auto-click OK on the Electron crash dialog FortiClient sometimes shows on launch.
+    Returns True if a dialog was found and dismissed."""
     try:
-        import ctypes, ctypes.wintypes
+        import ctypes
         user32 = ctypes.windll.user32
         hwnd = user32.FindWindowW(None, "Error")
-        if hwnd:
-            # Find the OK button (control ID 2 = IDOK) and send a click
-            ok_hwnd = user32.FindWindowExW(hwnd, None, "Button", "OK")
+        if not hwnd:
+            return False
+        # Try every locale variant of the OK button text.
+        for label in ("OK", "Aceptar", "확인", "Ok"):
+            ok_hwnd = user32.FindWindowExW(hwnd, None, "Button", label)
             if ok_hwnd:
                 user32.SendMessageW(ok_hwnd, 0x00F5, 0, 0)  # BM_CLICK
+                return True
+        # Fallback: close via WM_COMMAND IDOK=1
+        user32.SendMessageW(hwnd, 0x0111, 1, 0)  # WM_COMMAND, IDOK
+        return True
     except Exception:
-        pass
+        return False
 
 
 def _forti_get_window(timeout: float = 1.0):
@@ -891,14 +898,22 @@ class VPNController:
         # 2. Try to find and focus the FortiClient window (launch if needed)
         win = _forti_get_window()
         if not win:
-            # Launch via explorer and wait
             forti_exe = _find_exe(FORTI_EXE_CANDIDATES, self.config.get("forti_exe_path", ""))
             if not forti_exe:
                 log.error("connect_forti: FortiClient exe not found")
                 return False, "FortiClient not found. Set the path in Settings."
-            log.info(f"connect_forti: launching {forti_exe}")
-            _open_gui(forti_exe)
-            win = _forti_get_window(timeout=10)
+            # Retry up to 2 times — FortiClient sometimes crashes on first launch
+            # with a JS error dialog; dismissing and relaunching usually recovers it.
+            for attempt in range(1, 3):
+                log.info(f"connect_forti: launching {forti_exe} (attempt {attempt})")
+                _open_gui(forti_exe)
+                win = _forti_get_window(timeout=10)
+                if win:
+                    break
+                dismissed = _forti_dismiss_error_dialog()
+                log.warning(f"connect_forti: window not found after attempt {attempt}, "
+                            f"dismissed_dialog={dismissed}")
+                time.sleep(1)
 
         if win:
             log.info("connect_forti: FortiClient window found")
