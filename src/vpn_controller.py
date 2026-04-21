@@ -166,13 +166,67 @@ def _forti_dismiss_error_dialog() -> bool:
         return False
 
 
+def _forti_diagnostics():
+    """Dump every Forti-related process + every window containing 'forti' (any case)
+    into the log, visible or hidden. Called when normal detection fails so we can
+    debug remotely from the log file."""
+    log = get_logger()
+    # --- Processes ---
+    try:
+        import psutil
+        procs = []
+        for p in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                name = (p.info.get("name") or "").lower()
+                if "forti" in name:
+                    procs.append(f"{p.info['pid']}:{p.info['name']}")
+            except Exception:
+                pass
+        log.info(f"forti_diag: processes={procs or 'NONE'}")
+    except Exception as e:
+        log.warning(f"forti_diag: process enum failed: {e}")
+
+    # --- Windows (all top-level, visible or hidden) ---
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        matches = []
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def _enum(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value
+                if "forti" in title.lower() or title == "Error":
+                    visible = bool(user32.IsWindowVisible(hwnd))
+                    cls_buf = ctypes.create_unicode_buffer(256)
+                    user32.GetClassNameW(hwnd, cls_buf, 256)
+                    matches.append(
+                        f"hwnd={hwnd} visible={visible} class='{cls_buf.value}' title='{title}'"
+                    )
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_enum), 0)
+        if matches:
+            for m in matches:
+                log.info(f"forti_diag: window {m}")
+        else:
+            log.info("forti_diag: no forti/error windows found")
+    except Exception as e:
+        log.warning(f"forti_diag: window enum failed: {e}")
+
+
 def _forti_restore_tray_window() -> bool:
     """Find and restore a hidden FortiClient tray window without launching a new process.
     Returns True if a FortiClient window (visible or hidden) was found and shown."""
+    log = get_logger()
     try:
         import ctypes
         user32 = ctypes.windll.user32
         found = [None]
+        found_title = [""]
 
         WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
 
@@ -183,16 +237,21 @@ def _forti_restore_tray_window() -> bool:
                 user32.GetWindowTextW(hwnd, buf, length + 1)
                 if buf.value == FORTI_TITLE:
                     found[0] = hwnd
+                    found_title[0] = buf.value
                     return False  # stop enumeration
             return True
 
         user32.EnumWindows(WNDENUMPROC(_enum), 0)
         if found[0]:
-            user32.ShowWindow(found[0], 9)   # SW_RESTORE
-            user32.SetForegroundWindow(found[0])
+            was_visible = bool(user32.IsWindowVisible(found[0]))
+            sw_rc = user32.ShowWindow(found[0], 9)   # SW_RESTORE
+            fg_rc = user32.SetForegroundWindow(found[0])
+            log.info(f"forti_restore: hwnd={found[0]} title='{found_title[0]}' "
+                     f"was_visible={was_visible} ShowWindow={sw_rc} SetForeground={fg_rc}")
             return True
-    except Exception:
-        pass
+        log.info("forti_restore: no window matching FORTI_TITLE found")
+    except Exception as e:
+        log.warning(f"forti_restore: exception {e}")
     return False
 
 
@@ -913,6 +972,7 @@ class VPNController:
     def connect_forti(self) -> Tuple[bool, str]:
         log = get_logger()
         log.info("connect_forti: attempt started")
+        _forti_diagnostics()
 
         # 1. Custom command
         cmd = self.config.get("forti_connect_cmd", "").strip()
@@ -927,6 +987,7 @@ class VPNController:
 
         # 2. Try to find and focus the FortiClient window (launch if needed)
         win = _forti_get_window()
+        log.info(f"connect_forti: initial _forti_get_window returned win={bool(win)}")
         if not win:
             # FortiClient may be running as a tray process with its window hidden.
             # Restore the hidden window instead of launching a second instance
@@ -935,8 +996,11 @@ class VPNController:
             log.info(f"connect_forti: tray restore attempt, found={restored}")
             if restored:
                 win = _forti_get_window(timeout=5)
+                log.info(f"connect_forti: after restore _forti_get_window returned win={bool(win)}")
 
         if not win:
+            log.info("connect_forti: no existing window found; diagnostics before launch:")
+            _forti_diagnostics()
             forti_exe = _find_exe(FORTI_EXE_CANDIDATES, self.config.get("forti_exe_path", ""))
             if not forti_exe:
                 log.error("connect_forti: FortiClient exe not found")
@@ -947,6 +1011,8 @@ class VPNController:
             if not win:
                 dismissed = _forti_dismiss_error_dialog()
                 log.warning(f"connect_forti: window not found after launch, dismissed_dialog={dismissed}")
+                log.info("connect_forti: diagnostics after failed launch:")
+                _forti_diagnostics()
 
         if win:
             log.info("connect_forti: FortiClient window found")
