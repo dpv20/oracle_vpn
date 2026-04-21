@@ -166,6 +166,36 @@ def _forti_dismiss_error_dialog() -> bool:
         return False
 
 
+def _forti_restore_tray_window() -> bool:
+    """Find and restore a hidden FortiClient tray window without launching a new process.
+    Returns True if a FortiClient window (visible or hidden) was found and shown."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        found = [None]
+
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def _enum(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if buf.value == FORTI_TITLE:
+                    found[0] = hwnd
+                    return False  # stop enumeration
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_enum), 0)
+        if found[0]:
+            user32.ShowWindow(found[0], 9)   # SW_RESTORE
+            user32.SetForegroundWindow(found[0])
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _forti_get_window(timeout: float = 1.0):
     """Find the FortiClient Electron window via pywinauto UIA backend.
     Returns the window wrapper or None."""
@@ -898,22 +928,25 @@ class VPNController:
         # 2. Try to find and focus the FortiClient window (launch if needed)
         win = _forti_get_window()
         if not win:
+            # FortiClient may be running as a tray process with its window hidden.
+            # Restore the hidden window instead of launching a second instance
+            # (a second instance causes a JS crash on some versions).
+            restored = _forti_restore_tray_window()
+            log.info(f"connect_forti: tray restore attempt, found={restored}")
+            if restored:
+                win = _forti_get_window(timeout=5)
+
+        if not win:
             forti_exe = _find_exe(FORTI_EXE_CANDIDATES, self.config.get("forti_exe_path", ""))
             if not forti_exe:
                 log.error("connect_forti: FortiClient exe not found")
                 return False, "FortiClient not found. Set the path in Settings."
-            # Retry up to 2 times — FortiClient sometimes crashes on first launch
-            # with a JS error dialog; dismissing and relaunching usually recovers it.
-            for attempt in range(1, 3):
-                log.info(f"connect_forti: launching {forti_exe} (attempt {attempt})")
-                _open_gui(forti_exe)
-                win = _forti_get_window(timeout=10)
-                if win:
-                    break
+            log.info(f"connect_forti: launching {forti_exe}")
+            _open_gui(forti_exe)
+            win = _forti_get_window(timeout=12)
+            if not win:
                 dismissed = _forti_dismiss_error_dialog()
-                log.warning(f"connect_forti: window not found after attempt {attempt}, "
-                            f"dismissed_dialog={dismissed}")
-                time.sleep(1)
+                log.warning(f"connect_forti: window not found after launch, dismissed_dialog={dismissed}")
 
         if win:
             log.info("connect_forti: FortiClient window found")
