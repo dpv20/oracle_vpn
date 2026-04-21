@@ -21,6 +21,7 @@ env/
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # User config (each user has their own in %APPDATA%)
 config.json
