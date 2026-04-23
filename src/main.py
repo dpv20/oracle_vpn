@@ -28,17 +28,27 @@ def _set_app_user_model_id():
         pass
 
 
+SHOW_FLAG_PATH = os.path.join(
+    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+    "VPNSwitcher",
+    "show.flag",
+)
+
+
 def _single_instance_guard():
-    """Use a named mutex to prevent multiple instances on Windows."""
+    """Named mutex + flag-file signaling. A second launch drops a flag file that
+    the running instance polls for, then exits silently instead of popping a
+    'already running' dialog."""
     try:
         import ctypes
         ctypes.windll.kernel32.CreateMutexW(None, False, "VPNSwitcher_SingleInstance")
         if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-            import tkinter as tk
-            from tkinter import messagebox
-            root = tk.Tk()
-            root.withdraw()
-            messagebox.showinfo("VPN Switcher", "VPN Switcher is already running.\nCheck the system tray.")
+            try:
+                os.makedirs(os.path.dirname(SHOW_FLAG_PATH), exist_ok=True)
+                with open(SHOW_FLAG_PATH, "w", encoding="utf-8") as f:
+                    f.write("show")
+            except Exception:
+                pass
             sys.exit(0)
     except Exception:
         pass

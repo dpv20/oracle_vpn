@@ -2,6 +2,7 @@
 ui.py — system tray icon + main window + settings dialog.
 All tkinter work happens on the main thread; pystray runs detached.
 """
+import os
 import sys
 import threading
 import time
@@ -715,9 +716,33 @@ class VPNSwitcherApp:
         self.root.after(0, self.__show)
 
     def __show(self):
+        # Topmost-toggle trick bypasses Windows' foreground-lock protection
+        # (same dance used in _handle_wrong_password).
         self.root.deiconify()
         self.root.lift()
+        self.root.attributes("-topmost", True)
         self.root.focus_force()
+        self.root.update()
+        self.root.attributes("-topmost", False)
+
+    def _poll_show_flag(self):
+        """Watch for the flag file dropped by a second-instance launch and bring
+        the existing window to the front when it appears."""
+        try:
+            flag = os.path.join(
+                os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                "VPNSwitcher",
+                "show.flag",
+            )
+            if os.path.exists(flag):
+                try:
+                    os.remove(flag)
+                except Exception:
+                    pass
+                self.__show()
+        except Exception:
+            pass
+        self.root.after(400, self._poll_show_flag)
 
     def _hide(self):
         self.root.withdraw()
@@ -986,6 +1011,9 @@ class VPNSwitcherApp:
         # Show window, then enter main loop
         self._center_window()
         self.root.deiconify()
+
+        # Watch for second-instance launches that want us to come to the front
+        self.root.after(400, self._poll_show_flag)
 
         # Initial status
         def _init_status():
