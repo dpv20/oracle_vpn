@@ -20,6 +20,10 @@ DEFAULTS = {
     "forti_disconnect_cmd": "",
     "forti_username": "",
     "forti_password_enc": "",
+    "gp_exe_path": "",
+    "gp_username": "",
+    "gp_password_enc": "",
+    "gp_portal_url": "ext.bice.cl",
     "start_with_windows": True,
 }
 

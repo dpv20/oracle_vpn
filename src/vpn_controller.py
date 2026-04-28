@@ -11,6 +11,7 @@ _autofill_cancel = threading.Event()
 
 CISCO = "cisco"
 FORTI = "forti"
+GPROT = "globalprotect"
 NONE = "disconnected"
 
 CISCO_CLI_CANDIDATES = [
@@ -30,6 +31,22 @@ FORTI_EXE_CANDIDATES = [
     r"C:\Program Files\Fortinet\FortiClientVPN\FortiClientVPN.exe",
     r"C:\Program Files (x86)\Fortinet\FortiClient\FortiClient.exe",
 ]
+
+GP_EXE_CANDIDATES = [
+    r"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe",
+    r"C:\Program Files (x86)\Palo Alto Networks\GlobalProtect\PanGPA.exe",
+]
+
+# GlobalProtect window/control identifiers (verified via UIA dump from a real
+# BANCO BICE installation on 2026-04-28).
+GP_TITLE = "GlobalProtect"
+GP_LOGIN_TITLE = "GlobalProtect Login"
+GP_CLASS = "#32770"
+GP_BTN_CONNECT_AUTOID = "1160"   # Connect / Disconnect "button" (reports as Pane)
+GP_STATUS_AUTOID = "1165"        # Static text: Disconnected / Connecting... / Connected
+GP_PORTAL_AUTOID = "1119"        # MFCMenuButton showing portal URL (e.g. ext.bice.cl)
+GP_PORTAL_LABEL_AUTOID = "1314"  # 'Portal' label
+GP_DESC_AUTOID = "1087"          # Description static beneath status
 
 NO_WINDOW = subprocess.CREATE_NO_WINDOW
 
@@ -1062,9 +1079,228 @@ def _get_adapter_status() -> dict:
                     result["forti_ssl"] = status
                 elif "fortinet" in current_desc:
                     result["forti_ndis"] = status
+                elif "palo alto" in current_desc or "globalprotect" in current_desc:
+                    result["globalprotect"] = status
     except Exception:
         pass
     return result
+
+
+# ── GlobalProtect (Palo Alto / BICE) ─────────────────────────────────────────
+
+def _gp_diagnostics():
+    """Verbose dump of every GlobalProtect-related process and window for
+    log-based debugging. Mirrors _forti_diagnostics."""
+    log = get_logger()
+    # Processes
+    try:
+        import psutil
+        procs = []
+        for p in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                name = (p.info.get("name") or "").lower()
+                if "pan" in name or "globalprotect" in name:
+                    procs.append(f"{p.info['pid']}:{p.info['name']}:{p.info.get('exe') or ''}")
+            except Exception:
+                pass
+        log.info(f"gp_diag: processes={procs or 'NONE'}")
+    except Exception as e:
+        log.warning(f"gp_diag: process enum failed: {e}")
+
+    # Windows (visible + hidden)
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        matches = []
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def _enum(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = buf.value
+                low = title.lower()
+                if "globalprotect" in low or "palo alto" in low:
+                    visible = bool(user32.IsWindowVisible(hwnd))
+                    cls_buf = ctypes.create_unicode_buffer(256)
+                    user32.GetClassNameW(hwnd, cls_buf, 256)
+                    matches.append(
+                        f"hwnd={hwnd} visible={visible} class='{cls_buf.value}' title='{title}'"
+                    )
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_enum), 0)
+        if matches:
+            for m in matches:
+                log.info(f"gp_diag: window {m}")
+        else:
+            log.info("gp_diag: no GlobalProtect windows found")
+    except Exception as e:
+        log.warning(f"gp_diag: window enum failed: {e}")
+
+    # Exe metadata
+    try:
+        gp_exe = _find_exe(GP_EXE_CANDIDATES, "")
+        if gp_exe:
+            exists = os.path.exists(gp_exe)
+            size = os.path.getsize(gp_exe) if exists else -1
+            log.info(f"gp_diag: gp_exe={gp_exe} exists={exists} size={size}")
+        else:
+            log.info("gp_diag: PanGPA.exe not found in candidate paths")
+    except Exception as e:
+        log.warning(f"gp_diag: exe metadata failed: {e}")
+
+
+def _gp_get_window(timeout: float = 1.0):
+    """Find the GlobalProtect main window via pywinauto UIA backend.
+    Matches title=='GlobalProtect' AND class=='#32770' (filters out random
+    dialogs). Returns the window wrapper or None."""
+    log = get_logger()
+    try:
+        from pywinauto import Desktop
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                desktop = Desktop(backend="uia")
+                wins = []
+                for w in desktop.windows():
+                    try:
+                        if (w.window_text() == GP_TITLE
+                                and w.element_info.class_name == GP_CLASS):
+                            wins.append(w)
+                    except Exception:
+                        pass
+                if wins:
+                    return wins[0]
+            except Exception as e:
+                log.debug(f"gp_get_window: iteration error: {e}")
+            time.sleep(0.4)
+    except Exception as e:
+        log.warning(f"gp_get_window: failed: {e}")
+    return None
+
+
+def _gp_find_descendant_by_autoid(win, auto_id: str):
+    """Walk descendants and return the first element whose UIA AutomationId matches."""
+    try:
+        for ctrl in win.descendants():
+            try:
+                if ctrl.element_info.automation_id == auto_id:
+                    return ctrl
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return None
+
+
+def _gp_get_status_text(win) -> str:
+    """Read the status static (auto_id=1165). Returns text such as
+    'Disconnected', 'Connecting...', 'Connected', or '' on failure."""
+    log = get_logger()
+    try:
+        ctrl = _gp_find_descendant_by_autoid(win, GP_STATUS_AUTOID)
+        if ctrl:
+            text = (ctrl.window_text() or "").strip()
+            log.info(f"gp_status: '{text}'")
+            return text
+        log.warning(f"gp_status: status static (auto_id={GP_STATUS_AUTOID}) not found")
+    except Exception as e:
+        log.warning(f"gp_status: read failed: {e}")
+    return ""
+
+
+def _gp_get_button_label(win) -> str:
+    """Read the Connect/Disconnect pane label (auto_id=1160)."""
+    try:
+        ctrl = _gp_find_descendant_by_autoid(win, GP_BTN_CONNECT_AUTOID)
+        if ctrl:
+            return (ctrl.window_text() or "").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _gp_login_window_present() -> bool:
+    """Check whether the SAML 'GlobalProtect Login' sub-window currently exists.
+    Used during the connect polling loop to log whether we are waiting on user
+    interaction inside the embedded WebView2 vs the tunnel just being slow."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        found = [False]
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+
+        def _enum(hwnd, _):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                if buf.value == GP_LOGIN_TITLE:
+                    found[0] = True
+                    return False
+            return True
+
+        user32.EnumWindows(WNDENUMPROC(_enum), 0)
+        return found[0]
+    except Exception:
+        return False
+
+
+def _gp_dump_descendants(win, max_items: int = 40):
+    """Dump the first N descendants of the GlobalProtect window with their
+    auto_id and class. Called when status/button auto_ids are not found, so
+    we can detect if Palo Alto changed control IDs in a future version."""
+    log = get_logger()
+    try:
+        log.info("gp_descendants: dumping window tree (auto_ids may have changed)")
+        count = 0
+        for ctrl in win.descendants():
+            if count >= max_items:
+                log.info(f"gp_descendants: truncated at {max_items} items")
+                break
+            try:
+                info = ctrl.element_info
+                log.info(
+                    f"gp_descendants: type={getattr(info, 'control_type', '?')} "
+                    f"auto_id='{getattr(info, 'automation_id', '')}' "
+                    f"class='{getattr(info, 'class_name', '')}' "
+                    f"name='{(ctrl.window_text() or '')[:60]}'"
+                )
+                count += 1
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning(f"gp_descendants: dump failed: {e}")
+
+
+def _gp_invoke_connect_button(win) -> bool:
+    """Invoke the Connect/Disconnect pane (auto_id=1160). The element reports
+    as Pane (MFC quirk) but accepts InvokePattern. Falls back to .click()."""
+    log = get_logger()
+    try:
+        ctrl = _gp_find_descendant_by_autoid(win, GP_BTN_CONNECT_AUTOID)
+        if not ctrl:
+            log.warning(f"gp_invoke: button auto_id={GP_BTN_CONNECT_AUTOID} not found")
+            return False
+        label = (ctrl.window_text() or "").strip()
+        log.info(f"gp_invoke: clicking button (label='{label}')")
+        try:
+            ctrl.invoke()
+            log.info("gp_invoke: invoke() succeeded")
+            return True
+        except Exception as e1:
+            log.info(f"gp_invoke: invoke() failed ({e1}), trying click_input()")
+            try:
+                ctrl.click_input()
+                log.info("gp_invoke: click_input() succeeded")
+                return True
+            except Exception as e2:
+                log.warning(f"gp_invoke: click_input() failed: {e2}")
+    except Exception as e:
+        log.error(f"gp_invoke: failed: {e}")
+    return False
 
 
 class VPNController:
@@ -1074,12 +1310,12 @@ class VPNController:
     # ── status detection ──────────────────────────────────────────────────────
 
     def get_status(self) -> str:
-        cisco = self._cisco_connected()
-        forti = self._forti_connected()
-        if cisco:
+        if self._cisco_connected():
             return CISCO
-        if forti:
+        if self._forti_connected():
             return FORTI
+        if self._gp_connected():
+            return GPROT
         return NONE
 
     def _cisco_connected(self) -> bool:
@@ -1092,6 +1328,27 @@ class VPNController:
                 low = line.strip().lower()
                 if "state: connected" in low and "disconnected" not in low:
                     return True
+        return False
+
+    def _gp_connected(self) -> bool:
+        """Detect GlobalProtect connection via the status static in the
+        (visible or hidden) PanGPA window. The adapter is also checked as a
+        secondary signal."""
+        try:
+            adapters = _get_adapter_status()
+            adapter_status = (adapters.get("globalprotect") or "").lower()
+            if adapter_status == "up":
+                return True
+        except Exception:
+            pass
+        try:
+            win = _gp_get_window(timeout=0.4)
+            if win:
+                text = _gp_get_status_text(win).lower()
+                if text and "connected" in text and "disconnect" not in text and "ing" not in text:
+                    return True
+        except Exception:
+            pass
         return False
 
     def _forti_connected(self) -> bool:
@@ -1285,7 +1542,158 @@ class VPNController:
             return self.disconnect_cisco()
         if status == FORTI:
             return self.disconnect_forti()
+        if status == GPROT:
+            return self.disconnect_globalprotect()
         return True, "No VPN was active."
+
+    # ── GlobalProtect connect / disconnect ────────────────────────────────────
+
+    def connect_globalprotect(self) -> Tuple[bool, str]:
+        """Launch (if needed), bring the GlobalProtect window forward, click
+        Connect, and wait passively while SAML completes. Verbose-logged so
+        remote debugging from the log file is possible."""
+        log = get_logger()
+        log.info("connect_globalprotect: ===== attempt started =====")
+        portal = self.config.get("gp_portal_url", "ext.bice.cl").strip() or "ext.bice.cl"
+        log.info(f"connect_globalprotect: configured portal='{portal}'")
+        _gp_diagnostics()
+
+        # 1. Try to find an existing window first
+        win = _gp_get_window(timeout=2)
+        log.info(f"connect_globalprotect: initial window found={bool(win)}")
+
+        # 2. Launch PanGPA.exe if no window yet
+        if not win:
+            gp_exe = _find_exe(GP_EXE_CANDIDATES, self.config.get("gp_exe_path", ""))
+            log.info(f"connect_globalprotect: gp_exe={gp_exe}")
+            if not gp_exe:
+                log.error("connect_globalprotect: PanGPA.exe not found")
+                return False, "GlobalProtect not installed (PanGPA.exe not found)."
+            log.info(f"connect_globalprotect: launching {gp_exe}")
+            _open_gui(gp_exe)
+            win = _gp_get_window(timeout=15)
+            log.info(f"connect_globalprotect: post-launch window found={bool(win)}")
+
+        if not win:
+            log.error("connect_globalprotect: window did not appear after launch")
+            _gp_diagnostics()
+            return False, "GlobalProtect window did not appear. Open it from the system tray and retry."
+
+        # 3. Bring window forward (it can be hidden in the tray)
+        try:
+            win.set_focus()
+            log.info("connect_globalprotect: window focused")
+        except Exception as e:
+            log.warning(f"connect_globalprotect: set_focus failed: {e}")
+
+        # 4. Read state
+        status_before = _gp_get_status_text(win)
+        button_label = _gp_get_button_label(win)
+        log.info(f"connect_globalprotect: pre-click status='{status_before}' button='{button_label}'")
+        if not status_before and not button_label:
+            log.warning("connect_globalprotect: could not read status or button — Palo Alto may have changed auto_ids; dumping tree:")
+            _gp_dump_descendants(win)
+
+        if "connected" in status_before.lower() \
+                and "disconnect" not in status_before.lower() \
+                and "ing" not in status_before.lower():
+            log.info("connect_globalprotect: already connected, nothing to do")
+            return True, "GlobalProtect already connected."
+
+        # If button currently says Disconnect, GlobalProtect thinks it's connected
+        # but our status check says otherwise — log and proceed to click anyway.
+        if "disconnect" in button_label.lower():
+            log.warning(f"connect_globalprotect: button label is '{button_label}' "
+                        f"but status='{status_before}'. Will click anyway.")
+
+        # 5. Click Connect
+        if not _gp_invoke_connect_button(win):
+            log.error("connect_globalprotect: failed to click Connect button")
+            _gp_dump_descendants(win)
+            _gp_diagnostics()
+            return False, "Could not click Connect button in GlobalProtect window."
+
+        # 6. Poll status. SAML auth happens inside an embedded WebView2 and may
+        # require user interaction (account selection, MFA). We wait passively.
+        log.info("connect_globalprotect: Connect clicked, polling status (timeout=120s)")
+        deadline = time.time() + 120
+        last_status = status_before
+        last_login_visible = False
+        while time.time() < deadline:
+            time.sleep(2)
+            cur_win = _gp_get_window(timeout=0.5) or win
+            cur_status = _gp_get_status_text(cur_win)
+            if cur_status and cur_status != last_status:
+                log.info(f"connect_globalprotect: status '{last_status}' -> '{cur_status}'")
+                last_status = cur_status
+            login_visible = _gp_login_window_present()
+            if login_visible != last_login_visible:
+                log.info(f"connect_globalprotect: SAML login window visible={login_visible}")
+                last_login_visible = login_visible
+            low = cur_status.lower()
+            if low and "connected" in low and "disconnect" not in low and "ing" not in low:
+                log.info("connect_globalprotect: tunnel UP")
+                return True, "GlobalProtect connected."
+            if "fail" in low or "error" in low or "denied" in low:
+                log.warning(f"connect_globalprotect: failure status '{cur_status}'")
+                _gp_diagnostics()
+                return False, f"GlobalProtect: {cur_status}"
+
+        log.warning(f"connect_globalprotect: timeout — last status='{last_status}'")
+        _gp_diagnostics()
+        return True, f"GlobalProtect: complete the SAML login. Last status: {last_status or 'unknown'}"
+
+    def disconnect_globalprotect(self) -> Tuple[bool, str]:
+        log = get_logger()
+        log.info("disconnect_globalprotect: ===== attempt started =====")
+        _gp_diagnostics()
+
+        win = _gp_get_window(timeout=2)
+        if not win:
+            gp_exe = _find_exe(GP_EXE_CANDIDATES, self.config.get("gp_exe_path", ""))
+            log.info(f"disconnect_globalprotect: launching {gp_exe} to find window")
+            if gp_exe:
+                _open_gui(gp_exe)
+                win = _gp_get_window(timeout=10)
+
+        if not win:
+            log.error("disconnect_globalprotect: window not found")
+            return False, "GlobalProtect window not found."
+
+        try:
+            win.set_focus()
+        except Exception:
+            pass
+
+        status_before = _gp_get_status_text(win)
+        button_label = _gp_get_button_label(win)
+        log.info(f"disconnect_globalprotect: pre-click status='{status_before}' button='{button_label}'")
+
+        # If already disconnected, no need to click
+        if "disconnect" in status_before.lower() and "ing" not in status_before.lower():
+            log.info("disconnect_globalprotect: already disconnected")
+            return True, "GlobalProtect already disconnected."
+
+        if not _gp_invoke_connect_button(win):
+            log.error("disconnect_globalprotect: failed to click Disconnect button")
+            return False, "Could not click Disconnect button."
+
+        # Wait for state to flip
+        deadline = time.time() + 15
+        last_status = status_before
+        while time.time() < deadline:
+            time.sleep(1)
+            cur_win = _gp_get_window(timeout=0.4) or win
+            cur_status = _gp_get_status_text(cur_win)
+            if cur_status and cur_status != last_status:
+                log.info(f"disconnect_globalprotect: status '{last_status}' -> '{cur_status}'")
+                last_status = cur_status
+            if "disconnect" in cur_status.lower() and "ing" not in cur_status.lower():
+                log.info("disconnect_globalprotect: confirmed disconnected")
+                return True, "GlobalProtect disconnected."
+
+        log.warning(f"disconnect_globalprotect: did not confirm disconnect, last='{last_status}'")
+        return True, "Disconnect clicked — GlobalProtect may still be finishing."
 
     def retry_forti_credentials(self, failed_step: str = "password") -> Tuple[bool, str]:
         """Retry the password after a rejection (username is assumed correct).

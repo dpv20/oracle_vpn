@@ -12,7 +12,7 @@ from tkinter import ttk, messagebox
 import pystray
 from PIL import Image, ImageDraw
 
-from vpn_controller import CISCO, FORTI, NONE, VPNController
+from vpn_controller import CISCO, FORTI, GPROT, NONE, VPNController
 from config_manager import ConfigManager
 from utils import asset_path
 
@@ -26,6 +26,7 @@ WHITE = "#ffffff"
 
 C_CISCO = "#b71c1c"       # Oracle red
 C_FORTI = "#2e7d32"       # Falabella green
+C_GP    = "#1565c0"       # BICE blue (GlobalProtect)
 C_NONE = "#555577"
 C_SUCCESS = "#4ade80"
 C_WARN = "#facc15"
@@ -33,6 +34,7 @@ C_ERROR = "#f87171"
 
 C_CISCO_HOVER = "#c62828"
 C_FORTI_HOVER = "#388e3c"
+C_GP_HOVER    = "#1976d2"
 C_NONE_HOVER = "#666688"
 
 
@@ -58,7 +60,8 @@ def _load_logo(variant: str = "") -> Image.Image:
 
 
 def _make_tray_icon(state: str) -> Image.Image:
-    """Lock icon for the system tray. Grey = no VPN, red = Oracle/Cisco, green = Falabella/Forti."""
+    """Lock icon for the system tray. Grey = no VPN, red = Oracle/Cisco,
+    green = Falabella/Forti, blue = BICE/GlobalProtect."""
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -67,6 +70,8 @@ def _make_tray_icon(state: str) -> Image.Image:
         bg = (183, 28, 28, 255)    # Oracle red
     elif state == FORTI:
         bg = (46, 125, 50, 255)    # Falabella green
+    elif state == GPROT:
+        bg = (21, 101, 192, 255)   # BICE blue
     else:
         bg = (80, 80, 110, 255)    # grey
 
@@ -272,6 +277,30 @@ class SettingsDialog(tk.Toplevel):
         self._label(frame, 'Custom disconnect command (optional — e.g. rasdial "VPN Name" /disconnect)')
         self._v_forti_disc = self._entry(frame, "forti_disconnect_cmd")
 
+        # ── BICE VPN (GlobalProtect) ──────────────────────────────────────────
+        self._section(frame, "BICE VPN (GlobalProtect)")
+
+        self._label(frame, "Username (e.g. akpadmanabhacharex@bice.cl)")
+        self._v_gp_user = self._entry(frame, "gp_username")
+
+        self._label(frame, "Password (encrypted with Windows DPAPI — optional)")
+        decrypted_gp = decrypt_password(self.cfg.get("gp_password_enc", ""))
+        self._v_gp_pass = tk.StringVar(value=decrypted_gp)
+        e_gp = tk.Entry(
+            frame, textvariable=self._v_gp_pass, show="●",
+            bg=SURFACE, fg=TEXT, insertbackground=TEXT,
+            relief=tk.FLAT, font=("Segoe UI", 10),
+            highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=C_GP
+        )
+        e_gp.pack(fill=tk.X, ipady=5)
+
+        self._label(frame, "Portal URL (default: ext.bice.cl)")
+        self._v_gp_portal = self._entry(frame, "gp_portal_url")
+
+        self._label(frame, "PanGPA.exe path (leave blank to auto-detect)")
+        self._v_gp_exe = self._entry(frame, "gp_exe_path")
+
         # ── General ───────────────────────────────────────────────────────────
         self._section(frame, "General")
 
@@ -289,6 +318,7 @@ class SettingsDialog(tk.Toplevel):
     def _save(self):
         from config_manager import encrypt_password
         forti_pass_plain = self._v_forti_pass.get()
+        gp_pass_plain = self._v_gp_pass.get()
         self.cfg.update({
             "cisco_host": self._v_cisco_host.get().strip(),
             "cisco_username": self._v_cisco_user.get().strip(),
@@ -299,6 +329,10 @@ class SettingsDialog(tk.Toplevel):
             "forti_disconnect_cmd": self._v_forti_disc.get().strip(),
             "forti_username": self._v_forti_user.get().strip(),
             "forti_password_enc": encrypt_password(forti_pass_plain) if forti_pass_plain else "",
+            "gp_username": self._v_gp_user.get().strip(),
+            "gp_password_enc": encrypt_password(gp_pass_plain) if gp_pass_plain else "",
+            "gp_portal_url": self._v_gp_portal.get().strip() or "ext.bice.cl",
+            "gp_exe_path": self._v_gp_exe.get().strip(),
             "start_with_windows": self._v_startup.get(),
         })
         self.config_manager.save(self.cfg)
@@ -393,6 +427,12 @@ class VPNSwitcherApp:
             lambda: self._switch(FORTI)
         )
         self._btn_forti.pack(fill=tk.X, pady=4)
+
+        self._btn_gp = VPNButton(
+            btn_area, "BICE VPN (GlobalProtect)", C_GP, C_GP_HOVER,
+            lambda: self._switch(GPROT)
+        )
+        self._btn_gp.pack(fill=tk.X, pady=4)
 
         self._btn_none = VPNButton(
             btn_area, "No VPN", C_NONE, C_NONE_HOVER,
@@ -565,6 +605,7 @@ class VPNSwitcherApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Oracle VPN (Cisco)", lambda: self._switch(CISCO)),
             pystray.MenuItem("Falabella VPN (FortiClient)", lambda: self._switch(FORTI)),
+            pystray.MenuItem("BICE VPN (GlobalProtect)", lambda: self._switch(GPROT)),
             pystray.MenuItem("No VPN", self._disconnect_all),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Settings", self._open_settings),
@@ -608,16 +649,25 @@ class VPNSwitcherApp:
             dot_color, label = C_CISCO, "Oracle VPN (Cisco Secure Client)"
             self._btn_cisco.set_active(True)
             self._btn_forti.set_active(False)
+            self._btn_gp.set_active(False)
             self._btn_none.set_active(False)
         elif s == FORTI:
             dot_color, label = C_FORTI, "Falabella VPN (FortiClient)"
             self._btn_cisco.set_active(False)
             self._btn_forti.set_active(True)
+            self._btn_gp.set_active(False)
+            self._btn_none.set_active(False)
+        elif s == GPROT:
+            dot_color, label = C_GP, "BICE VPN (GlobalProtect)"
+            self._btn_cisco.set_active(False)
+            self._btn_forti.set_active(False)
+            self._btn_gp.set_active(True)
             self._btn_none.set_active(False)
         else:
             dot_color, label = C_NONE, "No VPN Connected"
             self._btn_cisco.set_active(False)
             self._btn_forti.set_active(False)
+            self._btn_gp.set_active(False)
             self._btn_none.set_active(True)
 
         self._dot.configure(fg=dot_color)
@@ -643,7 +693,7 @@ class VPNSwitcherApp:
             _vc._autofill_cancel.clear()
             self._set_busy(True)
             try:
-                # Disconnect the other VPN first
+                # Disconnect the other VPN first (VPNs are mutually exclusive)
                 if current == CISCO and target != CISCO:
                     self._msg("Disconnecting Cisco Secure Client…")
                     ok, msg = self.controller.disconnect_cisco()
@@ -662,6 +712,15 @@ class VPNSwitcherApp:
                     else:
                         time.sleep(1)
 
+                elif current == GPROT and target != GPROT:
+                    self._msg("Disconnecting BICE VPN (GlobalProtect)…")
+                    ok, msg = self.controller.disconnect_globalprotect()
+                    if not ok:
+                        self._msg(f"⚠  {msg}")
+                        time.sleep(2)
+                    else:
+                        time.sleep(1)
+
                 # Connect target
                 if target == CISCO:
                     self._msg("Connecting to Cisco Secure Client…")
@@ -673,6 +732,9 @@ class VPNSwitcherApp:
                         self._msg("⚠  Contraseña incorrecta — actualízala en Settings.")
                         self.root.after(0, lambda: self._handle_wrong_password(target))
                         return
+                elif target == GPROT:
+                    self._msg("Connecting to BICE VPN (GlobalProtect)…")
+                    ok, msg = self.controller.connect_globalprotect()
                 else:
                     ok, msg = True, "Disconnected."
 
