@@ -7,7 +7,7 @@ import sys
 import threading
 import time
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 import pystray
 from PIL import Image, ImageDraw
@@ -313,6 +313,58 @@ class SettingsDialog(tk.Toplevel):
             font=("Segoe UI", 10)
         )
         chk.pack(anchor="w", pady=6)
+
+        # ── Save log button (for remote debugging) ────────────────────────────
+        tk.Label(
+            frame,
+            text="Export the diagnostic log so you can send it for support.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 8)
+        ).pack(anchor="w", pady=(10, 4))
+        tk.Button(
+            frame, text="💾  Save log to file…",
+            bg=SURFACE, fg=TEXT, relief=tk.FLAT,
+            font=("Segoe UI", 9), padx=12, pady=6,
+            command=self._save_log, cursor="hand2"
+        ).pack(anchor="w", pady=(0, 8))
+
+
+    def _save_log(self):
+        import shutil
+        from datetime import datetime
+        from logger import LOG_FILE
+
+        if not os.path.exists(LOG_FILE):
+            messagebox.showwarning(
+                "No log yet",
+                f"No log file found at:\n{LOG_FILE}\n\n"
+                "Try connecting to a VPN first — that produces log entries.",
+                parent=self
+            )
+            return
+
+        default_name = f"vpnswitcher-{datetime.now():%Y%m%d-%H%M%S}.log"
+        dest = filedialog.asksaveasfilename(
+            parent=self,
+            title="Save log as…",
+            defaultextension=".log",
+            initialfile=default_name,
+            filetypes=[("Log files", "*.log"), ("All files", "*.*")],
+        )
+        if not dest:
+            return
+        try:
+            shutil.copy2(LOG_FILE, dest)
+            messagebox.showinfo(
+                "Log saved",
+                f"Saved to:\n{dest}",
+                parent=self
+            )
+        except Exception as e:
+            messagebox.showerror(
+                "Could not save log",
+                f"{e}",
+                parent=self
+            )
 
 
     def _save(self):

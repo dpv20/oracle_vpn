@@ -2,10 +2,11 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-from utils import asset_path
-
-LOG_DIR = asset_path()          # resolves to <project>/assets/ or installed assets/
-LOG_FILE = asset_path("vpnswitcher.log")
+# Log next to config.json in %APPDATA%\VPNSwitcher so the file persists across
+# runs and survives the PyInstaller _MEIPASS temp dir being wiped on exit.
+APPDATA = os.getenv("APPDATA", os.path.expanduser("~"))
+LOG_DIR = os.path.join(APPDATA, "VPNSwitcher")
+LOG_FILE = os.path.join(LOG_DIR, "vpnswitcher.log")
 
 _logger = None
 
