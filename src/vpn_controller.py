@@ -1422,6 +1422,7 @@ class VPNController:
                 return False, f"FortiClient custom command failed: {e}"
 
         # 2. Try to find and focus the FortiClient window (launch if needed)
+        just_launched = False
         win = _forti_get_window()
         log.info(f"connect_forti: initial _forti_get_window returned win={bool(win)}")
         if not win:
@@ -1464,6 +1465,7 @@ class VPNController:
             log.info(f"connect_forti: launching {forti_exe}")
             _open_gui(forti_exe)
             win = _forti_get_window(timeout=12)
+            just_launched = bool(win)
             if not win:
                 dismissed = _forti_dismiss_error_dialog()
                 log.warning(f"connect_forti: window not found after launch, dismissed_dialog={dismissed}")
@@ -1477,6 +1479,15 @@ class VPNController:
                 win.set_focus()
             except Exception:
                 pass
+
+            # Electron renders the window ~1s after launch, but the React event
+            # handlers aren't wired yet — a Connect click in that gap is silently
+            # dropped and the SAML popup never appears (logged as no_popup).
+            # Wait briefly so the button's click handler is live before clicking.
+            if just_launched:
+                log.info("connect_forti: fresh launch — waiting 2.5s for Electron hydration")
+                time.sleep(2.5)
+
             _forti_click_button(win, ["Connect", "Conectar", "SAML Login"])
 
             # Auto-fill sign-in credentials if saved
@@ -1487,12 +1498,29 @@ class VPNController:
                 flow_mode  = self.config.get("forti_flow_mode", "detect")
                 flow_steps = self.config.get("forti_flow_steps",
                                              ["username", "password", "mfa"])
-                log.info(f"connect_forti: autofill starting (mode={flow_mode})")
-                if flow_mode == "custom":
-                    result = _forti_autofill_custom_flow(username, password, flow_steps)
-                else:
-                    result = _forti_autofill_signin(username, password)
+
+                def _run_autofill():
+                    log.info(f"connect_forti: autofill starting (mode={flow_mode})")
+                    if flow_mode == "custom":
+                        return _forti_autofill_custom_flow(username, password, flow_steps)
+                    return _forti_autofill_signin(username, password)
+
+                result = _run_autofill()
                 log.info(f"connect_forti: autofill result={result}")
+
+                # Click was silently dropped → SAML popup never appeared.
+                # Re-click Connect once and retry autofill.
+                if result == "no_popup":
+                    log.info("connect_forti: no_popup — retrying Connect click")
+                    try:
+                        win.set_focus()
+                    except Exception:
+                        pass
+                    time.sleep(1.5)
+                    _forti_click_button(win, ["Connect", "Conectar", "SAML Login"])
+                    result = _run_autofill()
+                    log.info(f"connect_forti: autofill retry result={result}")
+
                 if result == "wrong_password":
                     return False, "__WRONG_PASSWORD__"
                 return True, "Credentials submitted — approve MFA if prompted."
