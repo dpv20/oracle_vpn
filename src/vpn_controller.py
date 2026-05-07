@@ -6,6 +6,40 @@ from typing import Optional, Tuple
 
 from logger import get_logger
 
+
+def _setup_comtypes_cache():
+    """Redirect comtypes' generated-proxy cache to a user-writable folder.
+
+    pywinauto's UIA backend uses comtypes, which writes generated COM proxy
+    modules into its own site-packages/comtypes/gen/ on first use. When Python
+    is installed system-wide (C:\\Program Files\\Python3xx), that path is
+    read-only — the write raises PermissionError, UIA initialization fails
+    silently, and every UIA window lookup returns None. We hit this on Adarsh's
+    PC, where _forti_get_window kept returning None even with the FortiClient
+    window on screen. Pre-pending a writable %LOCALAPPDATA% path to
+    comtypes.gen.__path__ makes comtypes write there instead.
+    """
+    cache = os.path.join(
+        os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+        "VPNSwitcher", "comtypes_cache",
+    )
+    try:
+        os.makedirs(cache, exist_ok=True)
+        init = os.path.join(cache, "__init__.py")
+        if not os.path.exists(init):
+            with open(init, "w", encoding="utf-8") as f:
+                f.write("")
+        import comtypes  # noqa: WPS433
+        if hasattr(comtypes, "gen") and hasattr(comtypes.gen, "__path__"):
+            if cache not in comtypes.gen.__path__:
+                comtypes.gen.__path__.insert(0, cache)
+    except Exception:
+        pass
+
+
+_setup_comtypes_cache()
+
+
 # Global cancellation flag — set to cancel any in-progress autofill
 _autofill_cancel = threading.Event()
 
@@ -454,19 +488,27 @@ def _forti_restore_tray_window() -> bool:
 def _forti_get_window(timeout: float = 1.0):
     """Find the FortiClient Electron window via pywinauto UIA backend.
     Returns the window wrapper or None."""
+    log = get_logger()
     try:
         from pywinauto import Desktop
         deadline = time.time() + timeout
         while time.time() < deadline:
             _forti_dismiss_error_dialog()
-            desktop = Desktop(backend="uia")
-            wins = [w for w in desktop.windows()
-                    if w.window_text() == FORTI_TITLE]
+            try:
+                desktop = Desktop(backend="uia")
+                wins = [w for w in desktop.windows()
+                        if w.window_text() == FORTI_TITLE]
+            except Exception as e:
+                # UIA init can fail with PermissionError when comtypes can't
+                # write its proxy cache (system-wide Python install). Surface
+                # it so users know to grant write access or run from a venv.
+                log.warning(f"_forti_get_window: UIA query failed: {e}")
+                wins = []
             if wins:
                 return wins[0]
             time.sleep(0.5)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"_forti_get_window: outer failure: {e}")
     return None
 
 
