@@ -14,27 +14,46 @@ def _setup_comtypes_cache():
     modules into its own site-packages/comtypes/gen/ on first use. When Python
     is installed system-wide (C:\\Program Files\\Python3xx), that path is
     read-only — the write raises PermissionError, UIA initialization fails
-    silently, and every UIA window lookup returns None. We hit this on Adarsh's
-    PC, where _forti_get_window kept returning None even with the FortiClient
-    window on screen. Pre-pending a writable %LOCALAPPDATA% path to
-    comtypes.gen.__path__ makes comtypes write there instead.
+    silently, and every UIA window lookup returns None.
+
+    1.0.15's first attempt guarded the patch with hasattr(comtypes, "gen"),
+    but comtypes.gen is a lazy subpackage that isn't auto-imported with
+    comtypes itself, so the guard was always False and the patch was a no-op.
+    Here we force-import it first, then prepend, then also override
+    _find_gen_dir directly as a fallback in case __path__ isn't honored.
     """
     cache = os.path.join(
         os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
         "VPNSwitcher", "comtypes_cache",
     )
+    log = get_logger()
     try:
         os.makedirs(cache, exist_ok=True)
         init = os.path.join(cache, "__init__.py")
         if not os.path.exists(init):
             with open(init, "w", encoding="utf-8") as f:
-                f.write("")
-        import comtypes  # noqa: WPS433
-        if hasattr(comtypes, "gen") and hasattr(comtypes.gen, "__path__"):
+                f.write("# VPNSwitcher comtypes cache\n")
+
+        # Force-load the lazy subpackage so __path__ exists, then prepend
+        # our writable cache. comtypes resolves gen_dir from gen.__path__[0].
+        try:
+            import comtypes.gen  # noqa: F401
             if cache not in comtypes.gen.__path__:
                 comtypes.gen.__path__.insert(0, cache)
-    except Exception:
-        pass
+            log.info(f"comtypes_cache: redirected to {cache}; "
+                     f"gen.__path__={list(comtypes.gen.__path__)}")
+        except Exception as e:
+            log.warning(f"comtypes_cache: __path__ patch failed: {e}")
+
+        # Belt-and-suspenders: replace _find_gen_dir directly. This is the
+        # function comtypes.client calls to decide where to write proxies.
+        try:
+            from comtypes.client import _code_cache
+            _code_cache._find_gen_dir = lambda: cache
+        except Exception as e:
+            log.warning(f"comtypes_cache: _find_gen_dir patch failed: {e}")
+    except Exception as e:
+        log.warning(f"comtypes_cache: setup failed: {e}")
 
 
 _setup_comtypes_cache()
