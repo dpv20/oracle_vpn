@@ -35,12 +35,10 @@ def _mix_hex(a: str, b: str, t: float) -> str:
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
-def _load_logo(variant: str = "") -> Image.Image:
-    """Load a logo PNG and remove white border pixels.
-    variant: '' = logo_cuadrado.png, 'rojo' = logo_cuadrado_rojo.png, 'verde' = logo_cuadrado_verde.png
-    """
-    name = f"logo_cuadrado_{variant}.png" if variant else "logo_cuadrado.png"
-    logo_path = asset_path(name)
+def _load_logo() -> Image.Image:
+    """Load the app logo (assets/logo_cuadrado.png), make the white background
+    transparent, and crop to the visible content."""
+    logo_path = asset_path("logo_cuadrado.png")
     img = Image.open(logo_path).convert("RGBA")
     data = img.getdata()
     new_data = [
@@ -974,16 +972,6 @@ class VPNSwitcherApp:
     def _update_tray_icon(self):
         if self._tray:
             self._tray.icon = _make_tray_icon(self._status)
-
-    def _update_window_icon(self, state: str):
-        try:
-            from PIL import ImageTk
-            variant = "rojo" if state == CISCO else "verde" if state == FORTI else ""
-            logo = _load_logo(variant).resize((32, 32), Image.LANCZOS)
-            self._tk_icon = ImageTk.PhotoImage(logo)
-            self.root.iconphoto(True, self._tk_icon)
-        except Exception:
-            pass
 
     # ── status monitor ─────────────────────────────────────────────────────────
 
