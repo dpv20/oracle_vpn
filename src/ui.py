@@ -15,29 +15,12 @@ from PIL import Image, ImageDraw
 from vpn_controller import CISCO, FORTI, GPROT, NONE, VPNController
 from config_manager import ConfigManager
 from utils import asset_path
+from theme import get_theme
 import session_manager
 from logger import get_logger
 
-# ── palette ────────────────────────────────────────────────────────────────────
-BG = "#1e1e2e"
-SURFACE = "#2a2a3e"
-BORDER = "#3a3a55"
-TEXT = "#e0e0f0"
-MUTED = "#7878a0"
+
 WHITE = "#ffffff"
-
-C_CISCO = "#b71c1c"       # Oracle red
-C_FORTI = "#2e7d32"       # Falabella green
-C_GP    = "#1565c0"       # BICE blue (GlobalProtect)
-C_NONE = "#555577"
-C_SUCCESS = "#4ade80"
-C_WARN = "#facc15"
-C_ERROR = "#f87171"
-
-C_CISCO_HOVER = "#c62828"
-C_FORTI_HOVER = "#388e3c"
-C_GP_HOVER    = "#1976d2"
-C_NONE_HOVER = "#666688"
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -69,13 +52,13 @@ def _make_tray_icon(state: str) -> Image.Image:
     d = ImageDraw.Draw(img)
 
     if state == CISCO:
-        bg = (183, 28, 28, 255)    # Oracle red
+        bg = (220, 38, 38, 255)
     elif state == FORTI:
-        bg = (46, 125, 50, 255)    # Falabella green
+        bg = (22, 163, 74, 255)
     elif state == GPROT:
-        bg = (21, 101, 192, 255)   # BICE blue
+        bg = (37, 99, 235, 255)
     else:
-        bg = (80, 80, 110, 255)    # grey
+        bg = (80, 80, 110, 255)
 
     d.rounded_rectangle([0, 0, size - 1, size - 1], radius=14, fill=bg)
     d.rounded_rectangle([20, 32, 44, 52], radius=4, fill=(255, 255, 255, 230))
@@ -85,72 +68,96 @@ def _make_tray_icon(state: str) -> Image.Image:
     return img
 
 
-# ── modern button widget ───────────────────────────────────────────────────────
+# ── VPN card (grid tile) ───────────────────────────────────────────────────────
 
-class VPNButton(tk.Frame):
-    def __init__(self, parent, title: str, color: str, hover: str, command, **kw):
-        super().__init__(parent, bg=color, cursor="hand2", **kw)
-        self._color = color
-        self._hover = hover
+class VPNCard(tk.Frame):
+    """A card-style button used in the 2x2 grid on the main window.
+
+    The card itself stays on the surface color; the accent color (Oracle red,
+    Falabella green, etc.) is shown only as a small colored dot on the top-left.
+    When active (the VPN is connected), the card gets a thicker accent border.
+    """
+
+    def __init__(self, parent, T, title, subtitle, accent, command):
+        super().__init__(
+            parent,
+            bg=T["surface"],
+            highlightthickness=1,
+            highlightbackground=T["border"],
+            highlightcolor=T["border"],
+            cursor="hand2",
+        )
+        self._T = T
+        self._accent = accent
         self._cmd = command
         self._active = False
 
-        inner = tk.Frame(self, bg=color, padx=16, pady=13)
-        inner.pack(fill=tk.X)
+        inner = tk.Frame(self, bg=T["surface"], padx=14, pady=12)
+        inner.pack(fill=tk.BOTH, expand=True)
         self._inner = inner
 
-        self._title_lbl = tk.Label(
-            inner, text=title, bg=color, fg=WHITE,
-            font=("Segoe UI", 11, "bold"), anchor="w"
+        # Top row: accent dot only (status is rendered in the hero).
+        self._dot = tk.Label(
+            inner, text="●", bg=T["surface"], fg=accent,
+            font=("Segoe UI", 14)
         )
-        self._title_lbl.pack(fill=tk.X)
+        self._dot.pack(anchor="w")
 
-        self._status_lbl = tk.Label(
-            inner, text="", bg=color, fg="#cccccc",
-            font=("Segoe UI", 8), anchor="w"
+        self._title = tk.Label(
+            inner, text=title,
+            bg=T["surface"], fg=T["text"],
+            font=("Segoe UI Semibold", 10), anchor="w", justify="left",
         )
-        self._status_lbl.pack(fill=tk.X)
+        self._title.pack(anchor="w", fill=tk.X, pady=(6, 0))
 
-        self._bind_all()
+        self._sub = tk.Label(
+            inner, text=subtitle or "",
+            bg=T["surface"], fg=T["text_muted"],
+            font=("Segoe UI", 8), anchor="w", justify="left",
+        )
+        self._sub.pack(anchor="w", fill=tk.X)
 
-    def _bind_all(self):
-        for w in [self, self._inner, self._title_lbl, self._status_lbl]:
-            w.bind("<Button-1>", lambda e: self._cmd())
-            w.bind("<Enter>", lambda e: self._set_bg(self._hover))
-            w.bind("<Leave>", lambda e: self._set_bg(self._color))
+        self._bound = [self, self._inner, self._dot, self._title, self._sub]
+        for w in self._bound:
+            w.bind("<Button-1>", lambda _e: self._cmd())
+            w.bind("<Enter>",    lambda _e: self._hover(True))
+            w.bind("<Leave>",    lambda _e: self._hover(False))
 
-    def _set_bg(self, c):
-        for w in [self, self._inner, self._title_lbl, self._status_lbl]:
-            w.configure(bg=c)
-
-    def set_sub(self, text: str):
-        self._status_lbl.configure(text=text)
+    def _hover(self, on: bool):
+        bg = self._T["surface_hi"] if on else self._T["surface"]
+        for w in self._bound:
+            w.configure(bg=bg)
 
     def set_active(self, active: bool):
         self._active = active
         if active:
-            self.configure(highlightthickness=2, highlightbackground=WHITE)
+            self.configure(
+                highlightthickness=2,
+                highlightbackground=self._accent,
+                highlightcolor=self._accent,
+            )
         else:
-            self.configure(highlightthickness=0)
-
-    def set_enabled(self, enabled: bool):
-        state = "normal" if enabled else "disabled"
-        self.configure(cursor="hand2" if enabled else "watch")
+            self.configure(
+                highlightthickness=1,
+                highlightbackground=self._T["border"],
+                highlightcolor=self._T["border"],
+            )
 
 
 # ── settings dialog ────────────────────────────────────────────────────────────
 
 class SettingsDialog(tk.Toplevel):
-    def __init__(self, parent, config_manager: ConfigManager):
+    def __init__(self, parent, config_manager: ConfigManager, T: dict):
         super().__init__(parent)
         self.config_manager = config_manager
         self.cfg = config_manager.load()
+        self._T = T
 
         self.title("VPN Switcher — Settings")
-        self.geometry("540x640")
-        self.minsize(460, 540)
+        self.geometry("560x660")
+        self.minsize(480, 560)
         self.resizable(True, True)
-        self.configure(bg=BG)
+        self.configure(bg=T["bg"])
         self.transient(parent)
         self.grab_set()
 
@@ -161,74 +168,97 @@ class SettingsDialog(tk.Toplevel):
         self.update_idletasks()
         pw = self.master.winfo_rootx()
         ph = self.master.winfo_rooty()
-        x = pw + (self.master.winfo_width() - 540) // 2
-        y = ph + (self.master.winfo_height() - 640) // 2
-        self.geometry(f"540x640+{x}+{y}")
+        x = pw + (self.master.winfo_width() - 560) // 2
+        y = ph + (self.master.winfo_height() - 660) // 2
+        self.geometry(f"560x660+{x}+{y}")
+
+    # ── helpers ────────────────────────────────────────────────────────────────
 
     def _label(self, parent, text):
-        tk.Label(parent, text=text, bg=BG, fg=MUTED,
-                 font=("Segoe UI", 8)).pack(anchor="w", pady=(8, 1))
+        T = self._T
+        tk.Label(parent, text=text, bg=T["bg"], fg=T["text_muted"],
+                 font=("Segoe UI", 8)).pack(anchor="w", pady=(10, 2))
 
     def _entry(self, parent, key, show=""):
+        T = self._T
         var = tk.StringVar(value=self.cfg.get(key, ""))
         e = tk.Entry(
             parent, textvariable=var, show=show,
-            bg=SURFACE, fg=TEXT, insertbackground=TEXT,
+            bg=T["surface"], fg=T["text"], insertbackground=T["text"],
             relief=tk.FLAT, font=("Segoe UI", 10),
-            highlightthickness=1, highlightbackground=BORDER,
-            highlightcolor=C_CISCO
+            highlightthickness=1, highlightbackground=T["border"],
+            highlightcolor=T["accent"],
         )
-        e.pack(fill=tk.X, ipady=5)
+        e.pack(fill=tk.X, ipady=6)
         return var
 
     def _section(self, parent, title):
-        tk.Label(parent, text=title, bg=BG, fg=TEXT,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(14, 2))
-        sep = tk.Frame(parent, bg=BORDER, height=1)
-        sep.pack(fill=tk.X, pady=(0, 4))
+        T = self._T
+        tk.Label(parent, text=title.upper(), bg=T["bg"], fg=T["text_muted"],
+                 font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(18, 4))
+        tk.Frame(parent, bg=T["border"], height=1).pack(fill=tk.X, pady=(0, 6))
+
+    def _password_entry(self, parent, value):
+        T = self._T
+        var = tk.StringVar(value=value)
+        e = tk.Entry(
+            parent, textvariable=var, show="●",
+            bg=T["surface"], fg=T["text"], insertbackground=T["text"],
+            relief=tk.FLAT, font=("Segoe UI", 10),
+            highlightthickness=1, highlightbackground=T["border"],
+            highlightcolor=T["accent"],
+        )
+        e.pack(fill=tk.X, ipady=6)
+        return var
+
+    # ── build ──────────────────────────────────────────────────────────────────
 
     def _build(self):
-        # ── button bar (anchored to the bottom, shared across tabs) ──────────
-        btn_frame = tk.Frame(self, bg=BG, pady=12, padx=20)
+        T = self._T
+
+        # Bottom button bar (anchored before notebook so it never gets hidden)
+        btn_frame = tk.Frame(self, bg=T["bg"], pady=14, padx=22)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
         tk.Button(
             btn_frame, text="Cancel",
-            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
-            font=("Segoe UI", 10), padx=16, pady=6,
-            command=self.destroy, cursor="hand2"
-        ).pack(side=tk.RIGHT, padx=(6, 0))
+            bg=T["surface"], fg=T["text_muted"], relief=tk.FLAT,
+            font=("Segoe UI", 10), padx=18, pady=7,
+            command=self.destroy, cursor="hand2",
+            activebackground=T["surface_hi"], activeforeground=T["text"],
+        ).pack(side=tk.RIGHT, padx=(8, 0))
 
         tk.Button(
             btn_frame, text="  Save  ",
-            bg=C_CISCO, fg=WHITE, relief=tk.FLAT,
-            font=("Segoe UI", 10, "bold"), padx=16, pady=6,
-            command=self._save, cursor="hand2"
+            bg=T["accent"], fg=WHITE, relief=tk.FLAT,
+            font=("Segoe UI", 10, "bold"), padx=18, pady=7,
+            command=self._save, cursor="hand2",
+            activebackground=T["accent_hover"], activeforeground=WHITE,
         ).pack(side=tk.RIGHT)
 
-        tk.Frame(self, bg=BORDER, height=1).pack(side=tk.BOTTOM, fill=tk.X)
+        tk.Frame(self, bg=T["border"], height=1).pack(side=tk.BOTTOM, fill=tk.X)
 
-        # ── notebook (4 tabs) ────────────────────────────────────────────────
+        # ttk Notebook styling (per-theme)
         style = ttk.Style(self)
         try:
             style.theme_use("clam")
         except Exception:
             pass
-        style.configure("VPN.TNotebook", background=BG, borderwidth=0)
+        style.configure("VPN.TNotebook", background=T["bg"], borderwidth=0)
         style.configure(
             "VPN.TNotebook.Tab",
-            background=SURFACE, foreground=MUTED,
-            padding=(14, 7), font=("Segoe UI", 9, "bold"),
+            background=T["surface"], foreground=T["text_muted"],
+            padding=(16, 8), font=("Segoe UI", 9, "bold"),
             borderwidth=0,
         )
         style.map(
             "VPN.TNotebook.Tab",
-            background=[("selected", BG), ("active", BORDER)],
-            foreground=[("selected", TEXT), ("active", TEXT)],
+            background=[("selected", T["bg"]), ("active", T["surface_hi"])],
+            foreground=[("selected", T["text"]), ("active", T["text"])],
         )
 
         nb = ttk.Notebook(self, style="VPN.TNotebook")
-        nb.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=(12, 6))
+        nb.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=14, pady=(14, 6))
 
         tab_gen    = self._new_tab(nb, "Switcher")
         tab_forti  = self._new_tab(nb, "Falabella")
@@ -241,17 +271,17 @@ class SettingsDialog(tk.Toplevel):
         self._build_gp_tab(tab_gp)
 
     def _new_tab(self, notebook, title):
-        """Create a tab with a scrollable, padded inner frame."""
-        outer = tk.Frame(notebook, bg=BG)
+        T = self._T
+        outer = tk.Frame(notebook, bg=T["bg"])
         notebook.add(outer, text=title)
 
-        canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
+        canvas = tk.Canvas(outer, bg=T["bg"], highlightthickness=0)
         sb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        inner = tk.Frame(canvas, bg=BG, padx=18, pady=4)
+        inner = tk.Frame(canvas, bg=T["bg"], padx=22, pady=6)
         win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
 
         def _on_resize(e):
@@ -272,18 +302,6 @@ class SettingsDialog(tk.Toplevel):
 
         return inner
 
-    def _password_entry(self, parent, value, accent):
-        var = tk.StringVar(value=value)
-        e = tk.Entry(
-            parent, textvariable=var, show="●",
-            bg=SURFACE, fg=TEXT, insertbackground=TEXT,
-            relief=tk.FLAT, font=("Segoe UI", 10),
-            highlightthickness=1, highlightbackground=BORDER,
-            highlightcolor=accent
-        )
-        e.pack(fill=tk.X, ipady=5)
-        return var
-
     # ── tabs ───────────────────────────────────────────────────────────────────
 
     def _build_oracle_tab(self, frame):
@@ -303,6 +321,7 @@ class SettingsDialog(tk.Toplevel):
 
     def _build_forti_tab(self, frame):
         from config_manager import decrypt_password
+        T = self._T
 
         self._section(frame, "FortiClient VPN")
 
@@ -311,7 +330,7 @@ class SettingsDialog(tk.Toplevel):
 
         self._label(frame, "Sign-in password (encrypted with Windows DPAPI)")
         self._v_forti_pass = self._password_entry(
-            frame, decrypt_password(self.cfg.get("forti_password_enc", "")), C_CISCO
+            frame, decrypt_password(self.cfg.get("forti_password_enc", ""))
         )
 
         self._label(frame, "FortiClient.exe path (leave blank to auto-detect)")
@@ -336,35 +355,38 @@ class SettingsDialog(tk.Toplevel):
         tk.Radiobutton(
             frame, text="Auto-detect",
             variable=self._v_forti_mode, value="detect",
-            bg=BG, fg=TEXT, selectcolor=SURFACE, activebackground=BG,
+            bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+            activebackground=T["bg"],
             font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
-        ).pack(anchor="w", pady=(4, 0))
+        ).pack(anchor="w", pady=(6, 0))
         tk.Label(
             frame,
             text="Reads each sign-in page and decides automatically\n"
                  "what to type: email, password or MFA.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 7), justify="left"
-        ).pack(anchor="w", padx=(22, 0), pady=(0, 6))
+            bg=T["bg"], fg=T["text_muted"], font=("Segoe UI", 7), justify="left"
+        ).pack(anchor="w", padx=(22, 0), pady=(0, 8))
 
         tk.Radiobutton(
             frame, text="Custom flow",
             variable=self._v_forti_mode, value="custom",
-            bg=BG, fg=TEXT, selectcolor=SURFACE, activebackground=BG,
+            bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+            activebackground=T["bg"],
             font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
         ).pack(anchor="w")
         tk.Label(
             frame,
             text="Faster. You define which steps your FortiClient shows.\n"
                  "Uncheck steps that don't appear on your PC.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 7), justify="left"
+            bg=T["bg"], fg=T["text_muted"], font=("Segoe UI", 7), justify="left"
         ).pack(anchor="w", padx=(22, 0), pady=(0, 4))
 
-        self._forti_custom_row = tk.Frame(frame, bg=BG)
+        self._forti_custom_row = tk.Frame(frame, bg=T["bg"])
 
         def _chk(text, var):
             return tk.Checkbutton(
                 self._forti_custom_row, text=text, variable=var,
-                bg=BG, fg=TEXT, selectcolor=SURFACE, activebackground=BG,
+                bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+                activebackground=T["bg"],
                 font=("Segoe UI", 9)
             )
         _chk("Email",    self._v_forti_step_username).pack(side=tk.LEFT)
@@ -384,7 +406,7 @@ class SettingsDialog(tk.Toplevel):
 
         self._label(frame, "Password (encrypted with Windows DPAPI — optional)")
         self._v_gp_pass = self._password_entry(
-            frame, decrypt_password(self.cfg.get("gp_password_enc", "")), C_GP
+            frame, decrypt_password(self.cfg.get("gp_password_enc", ""))
         )
 
         self._label(frame, "Portal URL (default: ext.bice.cl)")
@@ -394,51 +416,81 @@ class SettingsDialog(tk.Toplevel):
         self._v_gp_exe = self._entry(frame, "gp_exe_path")
 
     def _build_general_tab(self, frame):
+        T = self._T
+
+        # ── Appearance (theme toggle) ─────────────────────────────────────
+        self._section(frame, "Appearance")
+
+        self._v_theme = tk.StringVar(value=self.cfg.get("theme_mode", "dark"))
+        theme_row = tk.Frame(frame, bg=T["bg"])
+        theme_row.pack(anchor="w", pady=(2, 6))
+        tk.Radiobutton(
+            theme_row, text="Dark",
+            variable=self._v_theme, value="dark",
+            bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+            activebackground=T["bg"], font=("Segoe UI", 10)
+        ).pack(side=tk.LEFT)
+        tk.Radiobutton(
+            theme_row, text="Light",
+            variable=self._v_theme, value="light",
+            bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+            activebackground=T["bg"], font=("Segoe UI", 10)
+        ).pack(side=tk.LEFT, padx=(16, 0))
+        tk.Label(
+            frame, text="The whole app re-skins as soon as you save.",
+            bg=T["bg"], fg=T["text_muted"], font=("Segoe UI", 8)
+        ).pack(anchor="w", pady=(0, 4))
+
+        # ── Startup ────────────────────────────────────────────────────────
         self._section(frame, "Startup")
 
         self._v_startup = tk.BooleanVar(value=self.cfg.get("start_with_windows", True))
         tk.Checkbutton(
             frame, text="Start VPN Switcher with Windows",
             variable=self._v_startup,
-            bg=BG, fg=TEXT, selectcolor=SURFACE,
-            activebackground=BG, activeforeground=TEXT,
+            bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+            activebackground=T["bg"], activeforeground=T["text"],
             font=("Segoe UI", 10)
         ).pack(anchor="w", pady=(4, 2))
 
+        # ── Show in main window ───────────────────────────────────────────
         self._section(frame, "Show in main window")
 
         self._v_show_forti = tk.BooleanVar(value=self.cfg.get("show_forti", True))
         tk.Checkbutton(
-            frame, text="Show Falabella VPN (FortiClient) button",
+            frame, text="Show Falabella VPN (FortiClient) tile",
             variable=self._v_show_forti,
-            bg=BG, fg=TEXT, selectcolor=SURFACE,
-            activebackground=BG, activeforeground=TEXT,
+            bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+            activebackground=T["bg"], activeforeground=T["text"],
             font=("Segoe UI", 10)
         ).pack(anchor="w", pady=(4, 2))
 
         self._v_show_gp = tk.BooleanVar(value=self.cfg.get("show_gp", True))
         tk.Checkbutton(
-            frame, text="Show BICE VPN (GlobalProtect) button",
+            frame, text="Show BICE VPN (GlobalProtect) tile",
             variable=self._v_show_gp,
-            bg=BG, fg=TEXT, selectcolor=SURFACE,
-            activebackground=BG, activeforeground=TEXT,
+            bg=T["bg"], fg=T["text"], selectcolor=T["surface"],
+            activebackground=T["bg"], activeforeground=T["text"],
             font=("Segoe UI", 10)
         ).pack(anchor="w", pady=(2, 4))
 
+        # ── Diagnostics ────────────────────────────────────────────────────
         self._section(frame, "Diagnostics")
 
         tk.Label(
             frame,
             text="Export the diagnostic log so you can send it for support.",
-            bg=BG, fg=MUTED, font=("Segoe UI", 8)
+            bg=T["bg"], fg=T["text_muted"], font=("Segoe UI", 8)
         ).pack(anchor="w", pady=(4, 4))
         tk.Button(
             frame, text="💾  Save log to file…",
-            bg=SURFACE, fg=TEXT, relief=tk.FLAT,
-            font=("Segoe UI", 9), padx=12, pady=6,
-            command=self._save_log, cursor="hand2"
+            bg=T["surface"], fg=T["text"], relief=tk.FLAT,
+            font=("Segoe UI", 9), padx=14, pady=7,
+            command=self._save_log, cursor="hand2",
+            activebackground=T["surface_hi"], activeforeground=T["text"],
         ).pack(anchor="w", pady=(0, 8))
 
+        # ── About ──────────────────────────────────────────────────────────
         self._section(frame, "About")
 
         try:
@@ -447,19 +499,18 @@ class SettingsDialog(tk.Toplevel):
             _ver = "?"
         tk.Label(
             frame, text=f"VPN Switcher v{_ver}",
-            bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
+            bg=T["bg"], fg=T["text"], font=("Segoe UI", 10, "bold")
         ).pack(anchor="w", pady=(4, 0))
         tk.Label(
             frame, text="github.com/dpv20/oracle_vpn",
-            bg=BG, fg=MUTED, font=("Segoe UI", 8)
-        ).pack(anchor="w", pady=(0, 6))
+            bg=T["bg"], fg=T["text_muted"], font=("Segoe UI", 8)
+        ).pack(anchor="w", pady=(0, 8))
 
     def _on_forti_mode_change(self):
         if self._v_forti_mode.get() == "custom":
             self._forti_custom_row.pack(anchor="w", padx=(22, 0), pady=(0, 6))
         else:
             self._forti_custom_row.pack_forget()
-
 
     def _save_log(self):
         import shutil
@@ -487,18 +538,9 @@ class SettingsDialog(tk.Toplevel):
             return
         try:
             shutil.copy2(LOG_FILE, dest)
-            messagebox.showinfo(
-                "Log saved",
-                f"Saved to:\n{dest}",
-                parent=self
-            )
+            messagebox.showinfo("Log saved", f"Saved to:\n{dest}", parent=self)
         except Exception as e:
-            messagebox.showerror(
-                "Could not save log",
-                f"{e}",
-                parent=self
-            )
-
+            messagebox.showerror("Could not save log", f"{e}", parent=self)
 
     def _save(self):
         from config_manager import encrypt_password
@@ -532,6 +574,7 @@ class SettingsDialog(tk.Toplevel):
             "start_with_windows": self._v_startup.get(),
             "show_forti": self._v_show_forti.get(),
             "show_gp": self._v_show_gp.get(),
+            "theme_mode": self._v_theme.get(),
         })
         self.config_manager.save(self.cfg)
         self.destroy()
@@ -546,133 +589,162 @@ class VPNSwitcherApp:
         self.config_manager = ConfigManager()
         self.config = self.config_manager.load()
         self.controller = VPNController(self.config)
+        self._T = get_theme(self.config.get("theme_mode", "dark"))
 
         self._status = NONE
         self._busy = False
         self._tray = None  # type: pystray.Icon
 
-        # Build root window (hidden until ready)
         self.root = tk.Tk()
         self.root.withdraw()
+        self._apply_root_chrome()
         self._build_window()
 
     # ── window ─────────────────────────────────────────────────────────────────
 
-    def _build_window(self):
-        root = self.root
-        root.title("VPN Switcher")
-        root.resizable(True, True)
-        root.configure(bg=BG)
-        root.protocol("WM_DELETE_WINDOW", self._hide)
+    def _apply_root_chrome(self):
+        T = self._T
+        self.root.title("VPN Switcher")
+        self.root.resizable(True, True)
+        self.root.configure(bg=T["bg"])
+        self.root.protocol("WM_DELETE_WINDOW", self._hide)
 
         try:
             from PIL import ImageTk
-            import tempfile, os
+            import tempfile
             logo = _load_logo()
-            # Save as .ico for Windows taskbar (iconbitmap is more reliable than iconphoto)
             ico_path = os.path.join(tempfile.gettempdir(), "vpnswitcher.ico")
-            logo.save(ico_path, format="ICO", sizes=[(256,256),(48,48),(32,32),(16,16)])
-            root.iconbitmap(ico_path)
-            # Also set iconphoto for the title bar
+            logo.save(ico_path, format="ICO", sizes=[(256, 256), (48, 48), (32, 32), (16, 16)])
+            self.root.iconbitmap(ico_path)
             logo32 = logo.resize((32, 32), Image.LANCZOS)
             self._tk_icon = ImageTk.PhotoImage(logo32)
-            root.iconphoto(True, self._tk_icon)
+            self.root.iconphoto(True, self._tk_icon)
         except Exception:
             pass
 
-        # Use grid so every row is explicitly placed — no side=BOTTOM surprises
+    def _build_window(self):
+        T = self._T
+        root = self.root
+
+        # 3 columns so the grid lays out as 2 columns + scrollbar-less gutter.
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(0, weight=0)  # header
-        root.rowconfigure(1, weight=0)  # status card
-        root.rowconfigure(2, weight=0)  # buttons
-        root.rowconfigure(3, weight=1)  # spacer
-        root.rowconfigure(4, weight=0)  # update banner
-        root.rowconfigure(5, weight=0)  # message
-        root.rowconfigure(6, weight=0)  # settings bar
 
         # ── header ────────────────────────────────────────────────────────────
-        hdr = tk.Frame(root, bg=BG, pady=14)
-        hdr.grid(row=0, column=0, sticky="ew")
-        tk.Label(hdr, text="VPN Switcher", bg=BG, fg=TEXT,
-                 font=("Segoe UI", 16, "bold")).pack()
+        hdr = tk.Frame(root, bg=T["bg"], pady=14)
+        hdr.grid(row=0, column=0, sticky="ew", padx=22)
+        tk.Label(hdr, text="VPN Switcher", bg=T["bg"], fg=T["text"],
+                 font=("Segoe UI Semibold", 16)).pack(side=tk.LEFT)
+        tk.Label(hdr, text=f" {self._theme_glyph()}",
+                 bg=T["bg"], fg=T["text_muted"],
+                 font=("Segoe UI", 10)).pack(side=tk.RIGHT)
 
-        # ── status card ───────────────────────────────────────────────────────
-        card = tk.Frame(root, bg=SURFACE, pady=12, padx=20,
-                        highlightthickness=1, highlightbackground=BORDER)
-        card.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 14))
+        # ── status hero ───────────────────────────────────────────────────────
+        hero = tk.Frame(
+            root, bg=T["surface"], padx=22, pady=20,
+            highlightthickness=1, highlightbackground=T["border"],
+        )
+        hero.grid(row=1, column=0, sticky="ew", padx=22, pady=(0, 18))
+        hero.columnconfigure(1, weight=1)
 
-        tk.Label(card, text="CURRENT STATUS", bg=SURFACE, fg=MUTED,
-                 font=("Segoe UI", 7, "bold")).pack()
-        self._dot = tk.Label(card, text="●", bg=SURFACE, fg=C_NONE,
-                             font=("Segoe UI", 16))
-        self._dot.pack(pady=(2, 0))
-        self._status_lbl = tk.Label(card, text="Checking…", bg=SURFACE, fg=TEXT,
-                                    font=("Segoe UI", 11, "bold"))
-        self._status_lbl.pack()
+        self._dot = tk.Label(
+            hero, text="●", bg=T["surface"], fg=T["text_dim"],
+            font=("Segoe UI", 28),
+        )
+        self._dot.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 16))
 
-        # ── VPN buttons ───────────────────────────────────────────────────────
-        self._btn_area = tk.Frame(root, bg=BG)
-        self._btn_area.grid(row=2, column=0, sticky="ew", padx=20)
+        self._status_lbl = tk.Label(
+            hero, text="Checking…", bg=T["surface"], fg=T["text"],
+            font=("Segoe UI Semibold", 14), anchor="w",
+        )
+        self._status_lbl.grid(row=0, column=1, sticky="ew")
 
-        self._btn_cisco = VPNButton(
-            self._btn_area, "Oracle VPN (Cisco Secure Client)", C_CISCO, C_CISCO_HOVER,
-            lambda: self._switch(CISCO)
+        self._status_sub = tk.Label(
+            hero, text="", bg=T["surface"], fg=T["text_muted"],
+            font=("Segoe UI", 9), anchor="w",
+        )
+        self._status_sub.grid(row=1, column=1, sticky="ew")
+
+        # ── VPN cards (2x2 grid) ──────────────────────────────────────────────
+        self._grid = tk.Frame(root, bg=T["bg"])
+        self._grid.grid(row=2, column=0, sticky="ew", padx=22)
+        self._grid.columnconfigure(0, weight=1, uniform="cards")
+        self._grid.columnconfigure(1, weight=1, uniform="cards")
+
+        self._card_cisco = VPNCard(
+            self._grid, T,
+            title="Oracle", subtitle="Cisco Secure Client",
+            accent=T["cisco"], command=lambda: self._switch(CISCO),
+        )
+        self._card_forti = VPNCard(
+            self._grid, T,
+            title="Falabella", subtitle="FortiClient",
+            accent=T["forti"], command=lambda: self._switch(FORTI),
+        )
+        self._card_gp = VPNCard(
+            self._grid, T,
+            title="BICE", subtitle="GlobalProtect",
+            accent=T["gp"], command=lambda: self._switch(GPROT),
+        )
+        self._card_none = VPNCard(
+            self._grid, T,
+            title="No VPN", subtitle="Disconnect everything",
+            accent=T["none_btn"], command=self._disconnect_all,
         )
 
-        self._btn_forti = VPNButton(
-            self._btn_area, "Falabella VPN (FortiClient)", C_FORTI, C_FORTI_HOVER,
-            lambda: self._switch(FORTI)
-        )
+        self._apply_card_visibility()
 
-        self._btn_gp = VPNButton(
-            self._btn_area, "BICE VPN (GlobalProtect)", C_GP, C_GP_HOVER,
-            lambda: self._switch(GPROT)
-        )
-
-        self._btn_none = VPNButton(
-            self._btn_area, "No VPN", C_NONE, C_NONE_HOVER,
-            self._disconnect_all
-        )
-
-        self._apply_button_visibility()
-
-        # ── spacer ────────────────────────────────────────────────────────────
-        tk.Frame(root, bg=BG).grid(row=3, column=0)
-
-        # ── update banner (hidden until an update is detected) ───────────────
+        # ── update banner (hidden until detected) ────────────────────────────
         self._update_lbl = tk.Label(
-            root, text="", bg=BG, fg=C_WARN,
-            font=("Segoe UI", 8, "underline"), cursor="hand2"
+            root, text="", bg=T["bg"], fg=T["warn"],
+            font=("Segoe UI", 8, "underline"), cursor="hand2",
         )
-        self._update_lbl.grid(row=4, column=0, pady=(4, 0))
+        self._update_lbl.grid(row=4, column=0, pady=(14, 0))
         self._update_lbl.bind("<Button-1>", self._install_update)
 
-        # ── message area ──────────────────────────────────────────────────────
-        self._msg_lbl = tk.Label(root, text="", bg=BG, fg=MUTED,
-                                 font=("Segoe UI", 8), wraplength=290)
-        self._msg_lbl.grid(row=5, column=0, pady=(2, 0), padx=20)
+        # ── message line ─────────────────────────────────────────────────────
+        self._msg_lbl = tk.Label(
+            root, text="", bg=T["bg"], fg=T["text_muted"],
+            font=("Segoe UI", 8), wraplength=420,
+        )
+        self._msg_lbl.grid(row=5, column=0, pady=(4, 0), padx=22)
 
-        # ── settings bar ──────────────────────────────────────────────────────
-        bottom = tk.Frame(root, bg=BG, pady=10, padx=20)
+        # ── bottom bar (about + settings) ────────────────────────────────────
+        bottom = tk.Frame(root, bg=T["bg"], pady=14, padx=22)
         bottom.grid(row=6, column=0, sticky="ew")
         tk.Button(
             bottom, text="⚙  Settings",
-            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
-            font=("Segoe UI", 9), pady=4, padx=10,
-            command=self._open_settings, cursor="hand2"
+            bg=T["surface"], fg=T["text"], relief=tk.FLAT,
+            font=("Segoe UI", 9), pady=6, padx=14,
+            command=self._open_settings, cursor="hand2",
+            activebackground=T["surface_hi"], activeforeground=T["text"],
         ).pack(side=tk.RIGHT)
         tk.Button(
-            bottom, text="For Oracle  |  by Diego Pavez Verdi",
-            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
-            font=("Segoe UI", 9), pady=4, padx=10,
-            command=self._open_about, cursor="hand2"
+            bottom, text="by Diego Pavez Verdi",
+            bg=T["bg"], fg=T["text_muted"], relief=tk.FLAT,
+            font=("Segoe UI", 9), pady=6, padx=4,
+            command=self._open_about, cursor="hand2",
+            activebackground=T["bg"], activeforeground=T["text"],
         ).pack(side=tk.LEFT)
 
+        root.rowconfigure(3, weight=1)
+
+    def _theme_glyph(self) -> str:
+        return "☾" if self._T["name"] == "dark" else "☀"
+
+    def _rebuild_main(self):
+        """Tear down and rebuild the main window so a theme change takes effect."""
+        for w in self.root.winfo_children():
+            w.destroy()
+        self._T = get_theme(self.config.get("theme_mode", "dark"))
+        self._apply_root_chrome()
+        self._build_window()
+        # Re-render the current status into the new widgets.
+        self._refresh_ui()
+
     def _center_window(self):
-        # Let tkinter measure the real required size after all widgets are built
         self.root.update_idletasks()
-        w = int(max(self.root.winfo_reqwidth(), 340) * 1.10)
-        h = int(self.root.winfo_reqheight() * 1.10)
+        w = int(max(self.root.winfo_reqwidth(), 420) * 1.05)
+        h = int(self.root.winfo_reqheight() * 1.05)
         self.root.minsize(w, h)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -680,48 +752,65 @@ class VPNSwitcherApp:
         y = (sh - h) // 2
         self.root.geometry(f"{w}x{h}+{x}+{y}")
 
+    # ── about dialog ───────────────────────────────────────────────────────────
+
     def _open_about(self, *_):
         self.root.after(0, self.__open_about)
 
     def __open_about(self):
+        T = self._T
         dlg = tk.Toplevel(self.root)
         dlg.title("About")
-        dlg.configure(bg=BG)
+        dlg.configure(bg=T["bg"])
         dlg.resizable(False, False)
         dlg.transient(self.root)
         dlg.grab_set()
 
-        pad = dict(bg=BG)
-        tk.Label(dlg, text="Diego Pavez Verdi", bg=BG, fg=TEXT,
-                 font=("Segoe UI", 11, "bold")).pack(pady=(20, 2), padx=24)
-        tk.Label(dlg, text="IT Consultant", bg=BG, fg=MUTED,
-                 font=("Segoe UI", 9)).pack(pady=(0, 10), padx=24)
+        try:
+            from version import __version__ as _ver
+        except Exception:
+            _ver = "?"
 
-        sep = tk.Frame(dlg, bg=BORDER, height=1)
-        sep.pack(fill=tk.X, padx=20)
+        outer = tk.Frame(dlg, bg=T["bg"], padx=28, pady=22)
+        outer.pack(fill=tk.BOTH, expand=True)
 
-        links = [
-            ("GitHub",          "https://github.com/dpv20"),
-            ("Oracle mail",     "diego.pavez@oracle.com"),
-            ("Personal mail",   "diego.pav3z@gmail.com"),
-        ]
-        for label, value in links:
-            row = tk.Frame(dlg, bg=BG)
-            row.pack(fill=tk.X, padx=24, pady=3)
-            tk.Label(row, text=f"{label}:", bg=BG, fg=MUTED,
-                     font=("Segoe UI", 8), width=12, anchor="w").pack(side=tk.LEFT)
-            tk.Label(row, text=value, bg=BG, fg=TEXT,
-                     font=("Segoe UI", 8), anchor="w").pack(side=tk.LEFT)
+        tk.Label(outer, text="VPN Switcher", bg=T["bg"], fg=T["text"],
+                 font=("Segoe UI Semibold", 14)).pack(anchor="w")
+        tk.Label(outer, text=f"version {_ver}", bg=T["bg"], fg=T["text_muted"],
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 14))
 
-        tk.Button(dlg, text="Close", bg=SURFACE, fg=MUTED, relief=tk.FLAT,
-                  font=("Segoe UI", 9), padx=16, pady=5,
-                  command=dlg.destroy, cursor="hand2").pack(pady=(14, 18))
+        tk.Frame(outer, bg=T["border"], height=1).pack(fill=tk.X)
+
+        tk.Label(outer, text="Diego Pavez Verdi", bg=T["bg"], fg=T["text"],
+                 font=("Segoe UI Semibold", 11)).pack(anchor="w", pady=(12, 0))
+        tk.Label(outer, text="IT Consultant — Oracle", bg=T["bg"], fg=T["text_muted"],
+                 font=("Segoe UI", 9)).pack(anchor="w", pady=(0, 10))
+
+        for label, value in [
+            ("GitHub",        "github.com/dpv20"),
+            ("Oracle mail",   "diego.pavez@oracle.com"),
+            ("Personal mail", "diego.pav3z@gmail.com"),
+        ]:
+            row = tk.Frame(outer, bg=T["bg"])
+            row.pack(fill=tk.X, pady=2)
+            tk.Label(row, text=f"{label}:", bg=T["bg"], fg=T["text_muted"],
+                     font=("Segoe UI", 9), width=14, anchor="w").pack(side=tk.LEFT)
+            tk.Label(row, text=value, bg=T["bg"], fg=T["text"],
+                     font=("Segoe UI", 9), anchor="w").pack(side=tk.LEFT)
+
+        tk.Button(
+            outer, text="Close",
+            bg=T["surface"], fg=T["text"], relief=tk.FLAT,
+            font=("Segoe UI", 9), padx=20, pady=6,
+            command=dlg.destroy, cursor="hand2",
+            activebackground=T["surface_hi"], activeforeground=T["text"],
+        ).pack(anchor="e", pady=(18, 0))
 
         dlg.update_idletasks()
-        pw = self.root.winfo_rootx()
-        ph = self.root.winfo_rooty()
         dw = dlg.winfo_reqwidth()
         dh = dlg.winfo_reqheight()
+        pw = self.root.winfo_rootx()
+        ph = self.root.winfo_rooty()
         x = pw + (self.root.winfo_width() - dw) // 2
         y = ph + (self.root.winfo_height() - dh) // 2
         dlg.geometry(f"+{x}+{y}")
@@ -763,10 +852,9 @@ class VPNSwitcherApp:
         log = get_logger()
         last_tick = time.time()
         while True:
-            # If the previous sleep(POLL_INTERVAL) stretched out far beyond
+            # If the previous sleep(POLL_INTERVAL) stretched far beyond
             # POLL_INTERVAL, the OS suspended us while the PC slept. Any VPN
-            # tunnel we had is dead — force a clean state before reporting
-            # status.
+            # tunnel we had is dead — force a clean state before reporting.
             now = time.time()
             gap = now - last_tick
             if gap > session_manager.SLEEP_THRESHOLD and not self._busy:
@@ -787,43 +875,42 @@ class VPNSwitcherApp:
                         self._update_tray_icon()
                 except Exception:
                     pass
-                # Heartbeat so session_manager can tell on next launch whether
-                # the PC slept (or the app was closed) for a long stretch.
                 session_manager.touch()
             last_tick = time.time()
             time.sleep(self.POLL_INTERVAL)
 
     def _refresh_ui(self):
+        T = self._T
         s = self._status
         if s == CISCO:
-            dot_color, label = C_CISCO, "Oracle VPN (Cisco Secure Client)"
-            self._btn_cisco.set_active(True)
-            self._btn_forti.set_active(False)
-            self._btn_gp.set_active(False)
-            self._btn_none.set_active(False)
+            dot, label, sub = T["cisco"], "Connected", "Oracle VPN — Cisco Secure Client"
+            self._card_cisco.set_active(True)
+            self._card_forti.set_active(False)
+            self._card_gp.set_active(False)
+            self._card_none.set_active(False)
         elif s == FORTI:
-            dot_color, label = C_FORTI, "Falabella VPN (FortiClient)"
-            self._btn_cisco.set_active(False)
-            self._btn_forti.set_active(True)
-            self._btn_gp.set_active(False)
-            self._btn_none.set_active(False)
+            dot, label, sub = T["forti"], "Connected", "Falabella VPN — FortiClient"
+            self._card_cisco.set_active(False)
+            self._card_forti.set_active(True)
+            self._card_gp.set_active(False)
+            self._card_none.set_active(False)
         elif s == GPROT:
-            dot_color, label = C_GP, "BICE VPN (GlobalProtect)"
-            self._btn_cisco.set_active(False)
-            self._btn_forti.set_active(False)
-            self._btn_gp.set_active(True)
-            self._btn_none.set_active(False)
+            dot, label, sub = T["gp"], "Connected", "BICE VPN — GlobalProtect"
+            self._card_cisco.set_active(False)
+            self._card_forti.set_active(False)
+            self._card_gp.set_active(True)
+            self._card_none.set_active(False)
         else:
-            dot_color, label = C_NONE, "No VPN Connected"
-            self._btn_cisco.set_active(False)
-            self._btn_forti.set_active(False)
-            self._btn_gp.set_active(False)
-            self._btn_none.set_active(True)
+            dot, label, sub = T["text_dim"], "Disconnected", "Pick a VPN to connect"
+            self._card_cisco.set_active(False)
+            self._card_forti.set_active(False)
+            self._card_gp.set_active(False)
+            self._card_none.set_active(True)
 
-        self._dot.configure(fg=dot_color)
+        self._dot.configure(fg=dot)
         self._status_lbl.configure(text=label)
+        self._status_sub.configure(text=sub)
 
-        # Update tray tooltip
         if self._tray:
             self._tray.title = f"VPN Switcher — {label}"
 
@@ -832,7 +919,6 @@ class VPNSwitcherApp:
     def _switch(self, target: str):
         if self._busy:
             return
-        # Re-load config in case settings changed
         self.config = self.config_manager.load()
         self.controller.config = self.config
 
@@ -843,7 +929,6 @@ class VPNSwitcherApp:
             _vc._autofill_cancel.clear()
             self._set_busy(True)
             try:
-                # Disconnect the other VPN first (VPNs are mutually exclusive)
                 if current == CISCO and target != CISCO:
                     self._msg("Disconnecting Cisco Secure Client…")
                     ok, msg = self.controller.disconnect_cisco()
@@ -851,7 +936,7 @@ class VPNSwitcherApp:
                         self._msg(f"⚠  {msg}")
                         time.sleep(2)
                     else:
-                        time.sleep(1)  # Give OS a moment
+                        time.sleep(1)
 
                 elif current == FORTI and target != FORTI:
                     self._msg("Disconnecting FortiClient VPN…")
@@ -871,7 +956,6 @@ class VPNSwitcherApp:
                     else:
                         time.sleep(1)
 
-                # Connect target
                 if target == CISCO:
                     self._msg("Connecting to Cisco Secure Client…")
                     ok, msg = self.controller.connect_cisco()
@@ -890,7 +974,6 @@ class VPNSwitcherApp:
 
                 self._msg(msg)
 
-                # Force a status refresh
                 time.sleep(3)
                 new_status = self.controller.get_status()
                 self._status = new_status
@@ -928,8 +1011,6 @@ class VPNSwitcherApp:
         self.root.after(0, self.__show)
 
     def __show(self):
-        # Topmost-toggle trick bypasses Windows' foreground-lock protection
-        # (same dance used in _handle_wrong_password).
         self.root.deiconify()
         self.root.lift()
         self.root.attributes("-topmost", True)
@@ -938,8 +1019,6 @@ class VPNSwitcherApp:
         self.root.attributes("-topmost", False)
 
     def _poll_show_flag(self):
-        """Watch for the flag file dropped by a second-instance launch and bring
-        the existing window to the front when it appears."""
         try:
             flag = os.path.join(
                 os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
@@ -969,21 +1048,22 @@ class VPNSwitcherApp:
 
     def __open_settings(self):
         self.__show()
-        dlg = SettingsDialog(self.root, self.config_manager)
+        old_theme = self.config.get("theme_mode", "dark")
+        dlg = SettingsDialog(self.root, self.config_manager, self._T)
         self.root.wait_window(dlg)
         # Reload config after settings saved
         self.config = self.config_manager.load()
         self.controller.config = self.config
-        # Re-apply main-window button visibility (show_forti / show_gp may have changed)
-        self._apply_button_visibility()
+        new_theme = self.config.get("theme_mode", "dark")
+        if new_theme != old_theme:
+            self._rebuild_main()
+        else:
+            self._apply_card_visibility()
 
     def _handle_wrong_password(self, target: str):
-        """Called on the main thread when FortiClient reports wrong credentials.
-        Shows a warning, opens Settings, then retries — or cancels if user dismisses."""
         import vpn_controller as _vc
         self._set_busy(False)
 
-        # Bring main window to front
         self.root.deiconify()
         self.root.lift()
         self.root.attributes("-topmost", True)
@@ -998,42 +1078,37 @@ class VPNSwitcherApp:
             parent=self.root
         )
         if not answer:
-            # User cancelled — stop autofill
             _vc._autofill_cancel.set()
             self._msg("Autofill cancelado.")
             return
 
-        # Open settings
-        dlg = SettingsDialog(self.root, self.config_manager)
+        old_theme = self.config.get("theme_mode", "dark")
+        dlg = SettingsDialog(self.root, self.config_manager, self._T)
         self.root.wait_window(dlg)
 
-        # Reload config with updated credentials
         self.config = self.config_manager.load()
         self.controller.config = self.config
+        new_theme = self.config.get("theme_mode", "dark")
+        if new_theme != old_theme:
+            self._rebuild_main()
 
-        # Small delay so Settings window fully disappears before we steal focus
         self.root.after(300, lambda: self._start_retry(target))
 
     def _start_retry(self, target: str):
-        """Close the sign-in window and restart the full connect flow with
-        the updated credentials saved in Settings."""
         import vpn_controller as _vc
         import ctypes
         _vc._autofill_cancel.clear()
 
-        # Close the existing sign-in popup so FortiClient resets to Connect state
         sign_in_win = _vc._find_signin_window()
         if sign_in_win:
             ctypes.windll.user32.PostMessageW(sign_in_win.handle, 0x0010, 0, 0)  # WM_CLOSE
             time.sleep(1.5)
 
-        # Hide main window so it doesn't compete for focus
         self.root.withdraw()
 
         def _retry():
             self._set_busy(True)
             try:
-                # Reload config with the new credentials
                 self.config = self.config_manager.load()
                 self.controller.config = self.config
 
@@ -1046,7 +1121,6 @@ class VPNSwitcherApp:
                     return
 
                 self._msg(msg)
-                # Poll until VPN connects or timeout (90 s for MFA approval)
                 deadline = time.time() + 90
                 while time.time() < deadline:
                     time.sleep(3)
@@ -1062,37 +1136,43 @@ class VPNSwitcherApp:
 
         threading.Thread(target=_retry, daemon=True).start()
 
-    # ── main-window button visibility ──────────────────────────────────────────
+    # ── card visibility ────────────────────────────────────────────────────────
 
-    def _apply_button_visibility(self):
-        """(Re)pack the VPN buttons according to the show_forti / show_gp flags
-        in the current config. Order: Cisco → Forti → BICE → No VPN."""
+    def _apply_card_visibility(self):
+        """Lay out the 2x2 card grid honoring show_forti / show_gp.
+        Cisco is always shown; No-VPN sits in the bottom-right.
+        Order tried (visible cards in this sequence):
+            cisco, [forti], [gp], none
+        and they fill row-major positions (0,0) (0,1) (1,0) (1,1).
+        """
         show_forti = self.config.get("show_forti", True)
         show_gp    = self.config.get("show_gp", True)
 
-        for btn in (self._btn_cisco, self._btn_forti, self._btn_gp, self._btn_none):
-            btn.pack_forget()
+        for c in (self._card_cisco, self._card_forti, self._card_gp, self._card_none):
+            c.grid_forget()
 
-        self._btn_cisco.pack(fill=tk.X, pady=4)
+        visible = [self._card_cisco]
         if show_forti:
-            self._btn_forti.pack(fill=tk.X, pady=4)
+            visible.append(self._card_forti)
         if show_gp:
-            self._btn_gp.pack(fill=tk.X, pady=4)
-        self._btn_none.pack(fill=tk.X, pady=4)
+            visible.append(self._card_gp)
+        visible.append(self._card_none)
+
+        for i, card in enumerate(visible):
+            r, c = divmod(i, 2)
+            card.grid(row=r, column=c, sticky="nsew", padx=5, pady=5, ipadx=2, ipady=4)
 
     # ── auto-update check ──────────────────────────────────────────────────────
 
     def _check_for_update(self):
-        """Background thread: compare installed version with origin/main via git."""
         try:
-            import os
             import re
             import subprocess
             from version import __version__
 
             repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
             if not os.path.isdir(os.path.join(repo_dir, ".git")):
-                return  # Not a git-based install — skip silently.
+                return
 
             git = self._find_git()
             if not git:
@@ -1125,12 +1205,10 @@ class VPNSwitcherApp:
                     text=f"⬆  Update available v{latest} — click to install"
                 ))
         except Exception:
-            pass  # Network/git issue — silently ignore
+            pass
 
     @staticmethod
     def _find_git():
-        """Return a usable git.exe path, or None if git isn't available."""
-        import os
         import shutil
         found = shutil.which("git")
         if found:
@@ -1145,15 +1223,12 @@ class VPNSwitcherApp:
         return None
 
     def _install_update(self, *_):
-        """Launch update.bat and exit so git can replace files."""
-        import os
         import subprocess
         import webbrowser
 
         repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
         updater = os.path.join(repo_dir, "update.bat")
         if not os.path.isfile(updater):
-            # Fallback to manual download page for non-git installs.
             webbrowser.open("https://github.com/dpv20/oracle_vpn/releases/latest")
             return
 
@@ -1187,35 +1262,24 @@ class VPNSwitcherApp:
     # ── run ────────────────────────────────────────────────────────────────────
 
     def run(self):
-        # First-run prompt: only on the very first launch (no config.json yet).
-        # After that, Settings only opens via the user clicking ⚙ Settings or
-        # when FortiClient reports __WRONG_PASSWORD__ in _handle_wrong_password.
         if self.config_manager.first_run:
             self.root.after(200, self.__open_settings)
 
-        # Build & start tray (non-blocking)
         self._build_tray()
         self._tray.run_detached()
 
-        # Start polling thread
         threading.Thread(target=self._monitor, daemon=True).start()
 
-        # Check for updates in background (5 s delay so UI is ready first)
         def _delayed_update_check():
             time.sleep(5)
             self._check_for_update()
         threading.Thread(target=_delayed_update_check, daemon=True).start()
 
-        # Show window, then enter main loop
         self._center_window()
         self.root.deiconify()
 
-        # Watch for second-instance launches that want us to come to the front
         self.root.after(400, self._poll_show_flag)
 
-        # Boot / sleep guard: if the PC was rebooted or slept since the last
-        # time the app was alive, any prior VPN tunnel is dead — force a clean
-        # state before showing the user a (possibly stale) status.
         should_clean, reason = session_manager.should_force_disconnect()
         log = get_logger()
         log.info(f"session_guard: should_force_disconnect={should_clean} reason='{reason}'")

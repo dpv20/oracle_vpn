@@ -29,6 +29,7 @@ DEFAULTS = {
     "start_with_windows": True,
     "show_forti": True,
     "show_gp": True,
+    "theme_mode": "dark",
 }
 
 
