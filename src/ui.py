@@ -760,7 +760,24 @@ class VPNSwitcherApp:
     # ── status monitor ─────────────────────────────────────────────────────────
 
     def _monitor(self):
+        log = get_logger()
+        last_tick = time.time()
         while True:
+            # If the previous sleep(POLL_INTERVAL) stretched out far beyond
+            # POLL_INTERVAL, the OS suspended us while the PC slept. Any VPN
+            # tunnel we had is dead — force a clean state before reporting
+            # status.
+            now = time.time()
+            gap = now - last_tick
+            if gap > session_manager.SLEEP_THRESHOLD and not self._busy:
+                log.info(f"_monitor: detected {gap:.0f}s gap after sleep — forcing disconnect_all")
+                self.root.after(0, lambda: self._msg("PC despertando — desconectando VPN…"))
+                try:
+                    self.controller.disconnect_all()
+                except Exception as e:
+                    log.warning(f"_monitor: post-sleep disconnect_all failed: {e}")
+                self.root.after(0, lambda: self._msg(""))
+
             if not self._busy:
                 try:
                     s = self.controller.get_status()
@@ -773,6 +790,7 @@ class VPNSwitcherApp:
                 # Heartbeat so session_manager can tell on next launch whether
                 # the PC slept (or the app was closed) for a long stretch.
                 session_manager.touch()
+            last_tick = time.time()
             time.sleep(self.POLL_INTERVAL)
 
     def _refresh_ui(self):
