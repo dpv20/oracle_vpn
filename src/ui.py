@@ -78,6 +78,73 @@ def _make_tray_icon(state: str) -> Image.Image:
     return img
 
 
+# ── theme toggle (slide switch with sun/moon) ──────────────────────────────────
+
+class ThemeToggle(tk.Canvas):
+    """A pill-shaped slide switch with a sun on the left and a moon on the
+    right. Clicking anywhere on the widget calls on_toggle, which is expected
+    to flip the theme_mode in config and rebuild the main window."""
+
+    W = 58
+    H = 26
+    PAD = 3   # gap between knob edge and pill edge
+
+    def __init__(self, parent, T, mode, on_toggle):
+        super().__init__(
+            parent, width=self.W, height=self.H,
+            bg=T["bg"], highlightthickness=0, bd=0, cursor="hand2",
+        )
+        self._T = T
+        self._mode = mode
+        self._on_toggle = on_toggle
+        self._draw()
+        self.bind("<Button-1>", lambda _e: self._on_toggle())
+
+    def _draw(self):
+        T = self._T
+        W, H, PAD = self.W, self.H, self.PAD
+        r = H // 2
+
+        # Pill track (smooth polygon approximating a rounded rect)
+        pts = [
+            r,     0,     W - r, 0,
+            W,     0,     W,     r,
+            W,     H - r, W,     H,
+            W - r, H,     r,     H,
+            0,     H,     0,     H - r,
+            0,     r,     0,     0,
+        ]
+        self.create_polygon(
+            pts, smooth=True, splinesteps=24,
+            fill=T["surface_hi"], outline=T["border"], width=1,
+        )
+
+        # Sun / moon glyphs at each end. The side opposite the knob is the
+        # one you'd land on if you toggled, so we highlight it.
+        sun_color  = T["text"] if self._mode == "light" else T["text_dim"]
+        moon_color = T["text"] if self._mode == "dark"  else T["text_dim"]
+        self.create_text(r,     H // 2, text="☀", fill=sun_color,
+                         font=("Segoe UI", 11))
+        self.create_text(W - r, H // 2, text="☾", fill=moon_color,
+                         font=("Segoe UI", 11))
+
+        # Knob — circle that lives flush against the active side.
+        knob_r = (H - PAD * 2) // 2
+        knob_cy = H // 2
+        knob_cx = (r if self._mode == "light" else W - r)
+        # Subtle shadow ring
+        self.create_oval(
+            knob_cx - knob_r - 1, knob_cy - knob_r - 1,
+            knob_cx + knob_r + 1, knob_cy + knob_r + 1,
+            fill=T["border"], outline="",
+        )
+        self.create_oval(
+            knob_cx - knob_r, knob_cy - knob_r,
+            knob_cx + knob_r, knob_cy + knob_r,
+            fill=T["text"], outline="",
+        )
+
+
 # ── VPN card (grid tile) ───────────────────────────────────────────────────────
 
 class VPNCard(tk.Frame):
@@ -659,9 +726,7 @@ class VPNSwitcherApp:
         hdr.grid(row=0, column=0, sticky="ew", padx=22)
         tk.Label(hdr, text="VPN Switcher", bg=T["bg"], fg=T["text"],
                  font=("Segoe UI Semibold", 16)).pack(side=tk.LEFT)
-        tk.Label(hdr, text=f" {self._theme_glyph()}",
-                 bg=T["bg"], fg=T["text_muted"],
-                 font=("Segoe UI", 10)).pack(side=tk.RIGHT)
+        ThemeToggle(hdr, T, T["name"], self._toggle_theme).pack(side=tk.RIGHT)
 
         # ── status hero ───────────────────────────────────────────────────────
         hero = tk.Frame(
@@ -753,8 +818,12 @@ class VPNSwitcherApp:
 
         root.rowconfigure(3, weight=1)
 
-    def _theme_glyph(self) -> str:
-        return "☾" if self._T["name"] == "dark" else "☀"
+    def _toggle_theme(self):
+        """Flip dark <-> light, persist, and rebuild the main window."""
+        new_mode = "light" if self._T["name"] == "dark" else "dark"
+        self.config["theme_mode"] = new_mode
+        self.config_manager.save(self.config)
+        self._rebuild_main()
 
     def _rebuild_main(self):
         """Tear down and rebuild the main window so a theme change takes effect."""
