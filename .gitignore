@@ -30,3 +30,7 @@ assets/SESSION_CONTEXT.txt
 # Log file (written to %LOCALAPPDATA%\VPNSwitcher\assets\ at runtime)
 assets/vpnswitcher.log
 *.log
+
+# Local handoff / working notes
+handoff.md
+PLAN_ACCION.md

@@ -20,11 +20,15 @@ DEFAULTS = {
     "forti_disconnect_cmd": "",
     "forti_username": "",
     "forti_password_enc": "",
+    "forti_flow_mode": "detect",
+    "forti_flow_steps": ["username", "password", "mfa"],
     "gp_exe_path": "",
     "gp_username": "",
     "gp_password_enc": "",
     "gp_portal_url": "ext.bice.cl",
     "start_with_windows": True,
+    "show_forti": True,
+    "show_gp": True,
 }
 
 
@@ -57,6 +61,9 @@ def decrypt_password(enc: str) -> str:
 
 class ConfigManager:
     def __init__(self):
+        # Capture whether this is a true first run BEFORE creating the dir,
+        # so callers can distinguish "never installed" from "config exists".
+        self.first_run = not os.path.exists(CONFIG_FILE)
         os.makedirs(CONFIG_DIR, exist_ok=True)
 
     def load(self) -> dict:
@@ -79,11 +86,6 @@ class ConfigManager:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
         self._apply_startup(config.get("start_with_windows", True))
-
-    def is_configured(self) -> bool:
-        """Returns True if the user has set at least the Cisco host or FortiClient path."""
-        cfg = self.load()
-        return bool(cfg.get("cisco_host") or cfg.get("forti_exe_path") or cfg.get("forti_connect_cmd"))
 
     def _get_startup_cmd(self) -> str:
         """Return the full command to launch this app from Windows startup."""

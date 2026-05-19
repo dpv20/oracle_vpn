@@ -15,6 +15,8 @@ from PIL import Image, ImageDraw
 from vpn_controller import CISCO, FORTI, GPROT, NONE, VPNController
 from config_manager import ConfigManager
 from utils import asset_path
+import session_manager
+from logger import get_logger
 
 # ── palette ────────────────────────────────────────────────────────────────────
 BG = "#1e1e2e"
@@ -145,8 +147,8 @@ class SettingsDialog(tk.Toplevel):
         self.cfg = config_manager.load()
 
         self.title("VPN Switcher — Settings")
-        self.geometry("500x600")
-        self.minsize(420, 500)
+        self.geometry("540x640")
+        self.minsize(460, 540)
         self.resizable(True, True)
         self.configure(bg=BG)
         self.transient(parent)
@@ -159,9 +161,9 @@ class SettingsDialog(tk.Toplevel):
         self.update_idletasks()
         pw = self.master.winfo_rootx()
         ph = self.master.winfo_rooty()
-        x = pw + (self.master.winfo_width() - 480) // 2
-        y = ph + (self.master.winfo_height() - 560) // 2
-        self.geometry(f"480x560+{x}+{y}")
+        x = pw + (self.master.winfo_width() - 540) // 2
+        y = ph + (self.master.winfo_height() - 640) // 2
+        self.geometry(f"540x640+{x}+{y}")
 
     def _label(self, parent, text):
         tk.Label(parent, text=text, bg=BG, fg=MUTED,
@@ -186,7 +188,7 @@ class SettingsDialog(tk.Toplevel):
         sep.pack(fill=tk.X, pady=(0, 4))
 
     def _build(self):
-        # ── button bar must be packed FIRST so it anchors to the bottom ──────
+        # ── button bar (anchored to the bottom, shared across tabs) ──────────
         btn_frame = tk.Frame(self, bg=BG, pady=12, padx=20)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
@@ -204,36 +206,87 @@ class SettingsDialog(tk.Toplevel):
             command=self._save, cursor="hand2"
         ).pack(side=tk.RIGHT)
 
-        # thin separator above buttons
         tk.Frame(self, bg=BORDER, height=1).pack(side=tk.BOTTOM, fill=tk.X)
 
-        # ── scrollable content area ────────────────────────────────────────────
-        canvas = tk.Canvas(self, bg=BG, highlightthickness=0)
-        sb = tk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        # ── notebook (4 tabs) ────────────────────────────────────────────────
+        style = ttk.Style(self)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("VPN.TNotebook", background=BG, borderwidth=0)
+        style.configure(
+            "VPN.TNotebook.Tab",
+            background=SURFACE, foreground=MUTED,
+            padding=(14, 7), font=("Segoe UI", 9, "bold"),
+            borderwidth=0,
+        )
+        style.map(
+            "VPN.TNotebook.Tab",
+            background=[("selected", BG), ("active", BORDER)],
+            foreground=[("selected", TEXT), ("active", TEXT)],
+        )
+
+        nb = ttk.Notebook(self, style="VPN.TNotebook")
+        nb.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=12, pady=(12, 6))
+
+        tab_gen    = self._new_tab(nb, "Switcher")
+        tab_forti  = self._new_tab(nb, "Falabella")
+        tab_oracle = self._new_tab(nb, "Oracle")
+        tab_gp     = self._new_tab(nb, "BICE")
+
+        self._build_general_tab(tab_gen)
+        self._build_forti_tab(tab_forti)
+        self._build_oracle_tab(tab_oracle)
+        self._build_gp_tab(tab_gp)
+
+    def _new_tab(self, notebook, title):
+        """Create a tab with a scrollable, padded inner frame."""
+        outer = tk.Frame(notebook, bg=BG)
+        notebook.add(outer, text=title)
+
+        canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
+        sb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=sb.set)
         sb.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        frame = tk.Frame(canvas, bg=BG, padx=20)
-        win_id = canvas.create_window((0, 0), window=frame, anchor="nw")
+        inner = tk.Frame(canvas, bg=BG, padx=18, pady=4)
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
 
         def _on_resize(e):
             canvas.itemconfig(win_id, width=e.width)
         canvas.bind("<Configure>", _on_resize)
 
-        def _on_frame_resize(e):
+        def _on_frame_resize(_e):
             canvas.configure(scrollregion=canvas.bbox("all"))
-        frame.bind("<Configure>", _on_frame_resize)
+        inner.bind("<Configure>", _on_frame_resize)
 
         def _on_mousewheel(e):
             try:
                 canvas.yview_scroll(-1 * (e.delta // 120), "units")
             except Exception:
                 pass
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        self.bind("<Destroy>", lambda _: canvas.unbind_all("<MouseWheel>"))
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
 
-        # ── Cisco ──────────────────────────────────────────────────────────────
+        return inner
+
+    def _password_entry(self, parent, value, accent):
+        var = tk.StringVar(value=value)
+        e = tk.Entry(
+            parent, textvariable=var, show="●",
+            bg=SURFACE, fg=TEXT, insertbackground=TEXT,
+            relief=tk.FLAT, font=("Segoe UI", 10),
+            highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=accent
+        )
+        e.pack(fill=tk.X, ipady=5)
+        return var
+
+    # ── tabs ───────────────────────────────────────────────────────────────────
+
+    def _build_oracle_tab(self, frame):
         self._section(frame, "Cisco Secure Client")
 
         self._label(frame, "VPN Host (e.g. vpn.company.com)")
@@ -248,25 +301,18 @@ class SettingsDialog(tk.Toplevel):
         self._label(frame, "vpncli.exe path (leave blank to auto-detect)")
         self._v_cisco_cli = self._entry(frame, "cisco_cli_path")
 
-        # ── FortiClient ────────────────────────────────────────────────────────
+    def _build_forti_tab(self, frame):
+        from config_manager import decrypt_password
+
         self._section(frame, "FortiClient VPN")
 
         self._label(frame, "Sign-in email (auto-filled in the login popup)")
         self._v_forti_user = self._entry(frame, "forti_username")
 
         self._label(frame, "Sign-in password (encrypted with Windows DPAPI)")
-        # Decrypt stored password for display
-        from config_manager import decrypt_password
-        decrypted = decrypt_password(self.cfg.get("forti_password_enc", ""))
-        self._v_forti_pass = tk.StringVar(value=decrypted)
-        e = tk.Entry(
-            frame, textvariable=self._v_forti_pass, show="●",
-            bg=SURFACE, fg=TEXT, insertbackground=TEXT,
-            relief=tk.FLAT, font=("Segoe UI", 10),
-            highlightthickness=1, highlightbackground=BORDER,
-            highlightcolor=C_CISCO
+        self._v_forti_pass = self._password_entry(
+            frame, decrypt_password(self.cfg.get("forti_password_enc", "")), C_CISCO
         )
-        e.pack(fill=tk.X, ipady=5)
 
         self._label(frame, "FortiClient.exe path (leave blank to auto-detect)")
         self._v_forti_exe = self._entry(frame, "forti_exe_path")
@@ -277,23 +323,69 @@ class SettingsDialog(tk.Toplevel):
         self._label(frame, 'Custom disconnect command (optional — e.g. rasdial "VPN Name" /disconnect)')
         self._v_forti_disc = self._entry(frame, "forti_disconnect_cmd")
 
-        # ── BICE VPN (GlobalProtect) ──────────────────────────────────────────
+        # ── Autofill flow ───────────────────────────────────────────────────
+        self._section(frame, "Autofill")
+
+        saved_mode  = self.cfg.get("forti_flow_mode", "detect")
+        saved_steps = self.cfg.get("forti_flow_steps", ["username", "password", "mfa"])
+        self._v_forti_mode = tk.StringVar(value=saved_mode)
+        self._v_forti_step_username = tk.BooleanVar(value="username" in saved_steps)
+        self._v_forti_step_password = tk.BooleanVar(value="password" in saved_steps)
+        self._v_forti_step_mfa      = tk.BooleanVar(value="mfa"      in saved_steps)
+
+        tk.Radiobutton(
+            frame, text="Auto-detect",
+            variable=self._v_forti_mode, value="detect",
+            bg=BG, fg=TEXT, selectcolor=SURFACE, activebackground=BG,
+            font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
+        ).pack(anchor="w", pady=(4, 0))
+        tk.Label(
+            frame,
+            text="Reads each sign-in page and decides automatically\n"
+                 "what to type: email, password or MFA.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 7), justify="left"
+        ).pack(anchor="w", padx=(22, 0), pady=(0, 6))
+
+        tk.Radiobutton(
+            frame, text="Custom flow",
+            variable=self._v_forti_mode, value="custom",
+            bg=BG, fg=TEXT, selectcolor=SURFACE, activebackground=BG,
+            font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
+        ).pack(anchor="w")
+        tk.Label(
+            frame,
+            text="Faster. You define which steps your FortiClient shows.\n"
+                 "Uncheck steps that don't appear on your PC.",
+            bg=BG, fg=MUTED, font=("Segoe UI", 7), justify="left"
+        ).pack(anchor="w", padx=(22, 0), pady=(0, 4))
+
+        self._forti_custom_row = tk.Frame(frame, bg=BG)
+
+        def _chk(text, var):
+            return tk.Checkbutton(
+                self._forti_custom_row, text=text, variable=var,
+                bg=BG, fg=TEXT, selectcolor=SURFACE, activebackground=BG,
+                font=("Segoe UI", 9)
+            )
+        _chk("Email",    self._v_forti_step_username).pack(side=tk.LEFT)
+        _chk("Password", self._v_forti_step_password).pack(side=tk.LEFT, padx=(10, 0))
+        _chk("MFA",      self._v_forti_step_mfa     ).pack(side=tk.LEFT, padx=(10, 0))
+
+        if saved_mode == "custom":
+            self._forti_custom_row.pack(anchor="w", padx=(22, 0), pady=(0, 6))
+
+    def _build_gp_tab(self, frame):
+        from config_manager import decrypt_password
+
         self._section(frame, "BICE VPN (GlobalProtect)")
 
         self._label(frame, "Username (e.g. akpadmanabhacharex@bice.cl)")
         self._v_gp_user = self._entry(frame, "gp_username")
 
         self._label(frame, "Password (encrypted with Windows DPAPI — optional)")
-        decrypted_gp = decrypt_password(self.cfg.get("gp_password_enc", ""))
-        self._v_gp_pass = tk.StringVar(value=decrypted_gp)
-        e_gp = tk.Entry(
-            frame, textvariable=self._v_gp_pass, show="●",
-            bg=SURFACE, fg=TEXT, insertbackground=TEXT,
-            relief=tk.FLAT, font=("Segoe UI", 10),
-            highlightthickness=1, highlightbackground=BORDER,
-            highlightcolor=C_GP
+        self._v_gp_pass = self._password_entry(
+            frame, decrypt_password(self.cfg.get("gp_password_enc", "")), C_GP
         )
-        e_gp.pack(fill=tk.X, ipady=5)
 
         self._label(frame, "Portal URL (default: ext.bice.cl)")
         self._v_gp_portal = self._entry(frame, "gp_portal_url")
@@ -301,31 +393,72 @@ class SettingsDialog(tk.Toplevel):
         self._label(frame, "PanGPA.exe path (leave blank to auto-detect)")
         self._v_gp_exe = self._entry(frame, "gp_exe_path")
 
-        # ── General ───────────────────────────────────────────────────────────
-        self._section(frame, "General")
+    def _build_general_tab(self, frame):
+        self._section(frame, "Startup")
 
         self._v_startup = tk.BooleanVar(value=self.cfg.get("start_with_windows", True))
-        chk = tk.Checkbutton(
+        tk.Checkbutton(
             frame, text="Start VPN Switcher with Windows",
             variable=self._v_startup,
             bg=BG, fg=TEXT, selectcolor=SURFACE,
             activebackground=BG, activeforeground=TEXT,
             font=("Segoe UI", 10)
-        )
-        chk.pack(anchor="w", pady=6)
+        ).pack(anchor="w", pady=(4, 2))
 
-        # ── Save log button (for remote debugging) ────────────────────────────
+        self._section(frame, "Show in main window")
+
+        self._v_show_forti = tk.BooleanVar(value=self.cfg.get("show_forti", True))
+        tk.Checkbutton(
+            frame, text="Show Falabella VPN (FortiClient) button",
+            variable=self._v_show_forti,
+            bg=BG, fg=TEXT, selectcolor=SURFACE,
+            activebackground=BG, activeforeground=TEXT,
+            font=("Segoe UI", 10)
+        ).pack(anchor="w", pady=(4, 2))
+
+        self._v_show_gp = tk.BooleanVar(value=self.cfg.get("show_gp", True))
+        tk.Checkbutton(
+            frame, text="Show BICE VPN (GlobalProtect) button",
+            variable=self._v_show_gp,
+            bg=BG, fg=TEXT, selectcolor=SURFACE,
+            activebackground=BG, activeforeground=TEXT,
+            font=("Segoe UI", 10)
+        ).pack(anchor="w", pady=(2, 4))
+
+        self._section(frame, "Diagnostics")
+
         tk.Label(
             frame,
             text="Export the diagnostic log so you can send it for support.",
             bg=BG, fg=MUTED, font=("Segoe UI", 8)
-        ).pack(anchor="w", pady=(10, 4))
+        ).pack(anchor="w", pady=(4, 4))
         tk.Button(
             frame, text="💾  Save log to file…",
             bg=SURFACE, fg=TEXT, relief=tk.FLAT,
             font=("Segoe UI", 9), padx=12, pady=6,
             command=self._save_log, cursor="hand2"
         ).pack(anchor="w", pady=(0, 8))
+
+        self._section(frame, "About")
+
+        try:
+            from version import __version__ as _ver
+        except Exception:
+            _ver = "?"
+        tk.Label(
+            frame, text=f"VPN Switcher v{_ver}",
+            bg=BG, fg=TEXT, font=("Segoe UI", 10, "bold")
+        ).pack(anchor="w", pady=(4, 0))
+        tk.Label(
+            frame, text="github.com/dpv20/oracle_vpn",
+            bg=BG, fg=MUTED, font=("Segoe UI", 8)
+        ).pack(anchor="w", pady=(0, 6))
+
+    def _on_forti_mode_change(self):
+        if self._v_forti_mode.get() == "custom":
+            self._forti_custom_row.pack(anchor="w", padx=(22, 0), pady=(0, 6))
+        else:
+            self._forti_custom_row.pack_forget()
 
 
     def _save_log(self):
@@ -371,6 +504,15 @@ class SettingsDialog(tk.Toplevel):
         from config_manager import encrypt_password
         forti_pass_plain = self._v_forti_pass.get()
         gp_pass_plain = self._v_gp_pass.get()
+
+        forti_steps = []
+        if self._v_forti_step_username.get():
+            forti_steps.append("username")
+        if self._v_forti_step_password.get():
+            forti_steps.append("password")
+        if self._v_forti_step_mfa.get():
+            forti_steps.append("mfa")
+
         self.cfg.update({
             "cisco_host": self._v_cisco_host.get().strip(),
             "cisco_username": self._v_cisco_user.get().strip(),
@@ -381,11 +523,15 @@ class SettingsDialog(tk.Toplevel):
             "forti_disconnect_cmd": self._v_forti_disc.get().strip(),
             "forti_username": self._v_forti_user.get().strip(),
             "forti_password_enc": encrypt_password(forti_pass_plain) if forti_pass_plain else "",
+            "forti_flow_mode": self._v_forti_mode.get(),
+            "forti_flow_steps": forti_steps,
             "gp_username": self._v_gp_user.get().strip(),
             "gp_password_enc": encrypt_password(gp_pass_plain) if gp_pass_plain else "",
             "gp_portal_url": self._v_gp_portal.get().strip() or "ext.bice.cl",
             "gp_exe_path": self._v_gp_exe.get().strip(),
             "start_with_windows": self._v_startup.get(),
+            "show_forti": self._v_show_forti.get(),
+            "show_gp": self._v_show_gp.get(),
         })
         self.config_manager.save(self.cfg)
         self.destroy()
@@ -465,99 +611,30 @@ class VPNSwitcherApp:
         self._status_lbl.pack()
 
         # ── VPN buttons ───────────────────────────────────────────────────────
-        btn_area = tk.Frame(root, bg=BG)
-        btn_area.grid(row=2, column=0, sticky="ew", padx=20)
+        self._btn_area = tk.Frame(root, bg=BG)
+        self._btn_area.grid(row=2, column=0, sticky="ew", padx=20)
 
         self._btn_cisco = VPNButton(
-            btn_area, "Oracle VPN (Cisco Secure Client)", C_CISCO, C_CISCO_HOVER,
+            self._btn_area, "Oracle VPN (Cisco Secure Client)", C_CISCO, C_CISCO_HOVER,
             lambda: self._switch(CISCO)
         )
-        self._btn_cisco.pack(fill=tk.X, pady=4)
 
         self._btn_forti = VPNButton(
-            btn_area, "Falabella VPN (FortiClient)", C_FORTI, C_FORTI_HOVER,
+            self._btn_area, "Falabella VPN (FortiClient)", C_FORTI, C_FORTI_HOVER,
             lambda: self._switch(FORTI)
         )
-        self._btn_forti.pack(fill=tk.X, pady=4)
 
         self._btn_gp = VPNButton(
-            btn_area, "BICE VPN (GlobalProtect)", C_GP, C_GP_HOVER,
+            self._btn_area, "BICE VPN (GlobalProtect)", C_GP, C_GP_HOVER,
             lambda: self._switch(GPROT)
         )
-        self._btn_gp.pack(fill=tk.X, pady=4)
 
         self._btn_none = VPNButton(
-            btn_area, "No VPN", C_NONE, C_NONE_HOVER,
+            self._btn_area, "No VPN", C_NONE, C_NONE_HOVER,
             self._disconnect_all
         )
-        self._btn_none.pack(fill=tk.X, pady=4)
 
-        # ── FortiClient autofill toggle button ────────────────────────────────
-        self._forti_panel_open = False
-        self._forti_toggle_btn = tk.Button(
-            btn_area, text="▶  FortiClient autofill",
-            bg=SURFACE, fg=MUTED, relief=tk.FLAT,
-            font=("Segoe UI", 8), pady=5, padx=10, anchor="w",
-            command=self._toggle_forti_panel, cursor="hand2"
-        )
-        self._forti_toggle_btn.pack(fill=tk.X, pady=(4, 0))
-
-        # ── Collapsible autofill panel (hidden by default) ────────────────────
-        saved_mode  = self.config.get("forti_flow_mode", "detect")
-        saved_steps = self.config.get("forti_flow_steps", ["username", "password", "mfa"])
-        self._forti_mode_var     = tk.StringVar(value=saved_mode)
-        self._forti_use_username = tk.BooleanVar(value="username" in saved_steps)
-        self._forti_use_password = tk.BooleanVar(value="password" in saved_steps)
-        self._forti_use_mfa      = tk.BooleanVar(value="mfa"      in saved_steps)
-
-        self._forti_panel = tk.Frame(btn_area, bg=SURFACE, padx=12, pady=10)
-        # (not packed — starts collapsed)
-
-        # Auto-detect option
-        auto_rb = tk.Radiobutton(
-            self._forti_panel, text="Auto-detect",
-            variable=self._forti_mode_var, value="detect",
-            bg=SURFACE, fg=TEXT, selectcolor=BG, activebackground=SURFACE,
-            font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
-        )
-        auto_rb.pack(anchor="w")
-        tk.Label(
-            self._forti_panel,
-            text="Reads each sign-in page and decides automatically\n"
-                 "what to type: email, password or MFA.",
-            bg=SURFACE, fg=MUTED, font=("Segoe UI", 7), justify="left"
-        ).pack(anchor="w", padx=(22, 0), pady=(0, 8))
-
-        # Custom flow option
-        custom_rb = tk.Radiobutton(
-            self._forti_panel, text="Custom flow",
-            variable=self._forti_mode_var, value="custom",
-            bg=SURFACE, fg=TEXT, selectcolor=BG, activebackground=SURFACE,
-            font=("Segoe UI", 9, "bold"), command=self._on_forti_mode_change
-        )
-        custom_rb.pack(anchor="w")
-        tk.Label(
-            self._forti_panel,
-            text="Is faster, You define which steps your FortiClient shows.\n"
-                 "Uncheck steps that don't appear on your PC.",
-            bg=SURFACE, fg=MUTED, font=("Segoe UI", 7), justify="left"
-        ).pack(anchor="w", padx=(22, 0), pady=(0, 4))
-
-        # Checkboxes (only visible in custom mode)
-        self._forti_custom_row = tk.Frame(self._forti_panel, bg=SURFACE)
-
-        def _chk(text, var):
-            return tk.Checkbutton(
-                self._forti_custom_row, text=text, variable=var,
-                bg=SURFACE, fg=TEXT, selectcolor=BG, activebackground=SURFACE,
-                font=("Segoe UI", 8), command=self._save_forti_flow
-            )
-        _chk("Email",    self._forti_use_username).pack(side=tk.LEFT)
-        _chk("Password", self._forti_use_password).pack(side=tk.LEFT, padx=(8, 0))
-        _chk("MFA",      self._forti_use_mfa     ).pack(side=tk.LEFT, padx=(8, 0))
-
-        if saved_mode == "custom":
-            self._forti_custom_row.pack(anchor="w", padx=(22, 0), pady=(0, 4))
+        self._apply_button_visibility()
 
         # ── spacer ────────────────────────────────────────────────────────────
         tk.Frame(root, bg=BG).grid(row=3, column=0)
@@ -693,6 +770,9 @@ class VPNSwitcherApp:
                         self._update_tray_icon()
                 except Exception:
                     pass
+                # Heartbeat so session_manager can tell on next launch whether
+                # the PC slept (or the app was closed) for a long stretch.
+                session_manager.touch()
             time.sleep(self.POLL_INTERVAL)
 
     def _refresh_ui(self):
@@ -876,6 +956,8 @@ class VPNSwitcherApp:
         # Reload config after settings saved
         self.config = self.config_manager.load()
         self.controller.config = self.config
+        # Re-apply main-window button visibility (show_forti / show_gp may have changed)
+        self._apply_button_visibility()
 
     def _handle_wrong_password(self, target: str):
         """Called on the main thread when FortiClient reports wrong credentials.
@@ -962,41 +1044,23 @@ class VPNSwitcherApp:
 
         threading.Thread(target=_retry, daemon=True).start()
 
-    # ── FortiClient flow mode ──────────────────────────────────────────────────
+    # ── main-window button visibility ──────────────────────────────────────────
 
-    def _toggle_forti_panel(self):
-        self._forti_panel_open = not self._forti_panel_open
-        if self._forti_panel_open:
-            self._forti_panel.pack(fill=tk.X, pady=(2, 0))
-            self._forti_toggle_btn.configure(text="▼  FortiClient autofill")
-        else:
-            self._forti_panel.pack_forget()
-            self._forti_toggle_btn.configure(text="▶  FortiClient autofill")
-        # Resize window to fit new content
-        self.root.update_idletasks()
-        h = int(self.root.winfo_reqheight() * 1.10)
-        w = self.root.winfo_width()
-        self.root.geometry(f"{w}x{h}")
+    def _apply_button_visibility(self):
+        """(Re)pack the VPN buttons according to the show_forti / show_gp flags
+        in the current config. Order: Cisco → Forti → BICE → No VPN."""
+        show_forti = self.config.get("show_forti", True)
+        show_gp    = self.config.get("show_gp", True)
 
-    def _on_forti_mode_change(self):
-        if self._forti_mode_var.get() == "custom":
-            self._forti_custom_row.pack(anchor="w", padx=(22, 0), pady=(0, 4))
-        else:
-            self._forti_custom_row.pack_forget()
-        self._save_forti_flow()
+        for btn in (self._btn_cisco, self._btn_forti, self._btn_gp, self._btn_none):
+            btn.pack_forget()
 
-    def _save_forti_flow(self):
-        steps = []
-        if self._forti_use_username.get():
-            steps.append("username")
-        if self._forti_use_password.get():
-            steps.append("password")
-        if self._forti_use_mfa.get():
-            steps.append("mfa")
-        self.config["forti_flow_mode"]  = self._forti_mode_var.get()
-        self.config["forti_flow_steps"] = steps
-        self.config_manager.save(self.config)
-        self.controller.config = self.config
+        self._btn_cisco.pack(fill=tk.X, pady=4)
+        if show_forti:
+            self._btn_forti.pack(fill=tk.X, pady=4)
+        if show_gp:
+            self._btn_gp.pack(fill=tk.X, pady=4)
+        self._btn_none.pack(fill=tk.X, pady=4)
 
     # ── auto-update check ──────────────────────────────────────────────────────
 
@@ -1105,8 +1169,10 @@ class VPNSwitcherApp:
     # ── run ────────────────────────────────────────────────────────────────────
 
     def run(self):
-        # First-run prompt if nothing is configured yet
-        if not self.config_manager.is_configured():
+        # First-run prompt: only on the very first launch (no config.json yet).
+        # After that, Settings only opens via the user clicking ⚙ Settings or
+        # when FortiClient reports __WRONG_PASSWORD__ in _handle_wrong_password.
+        if self.config_manager.first_run:
             self.root.after(200, self.__open_settings)
 
         # Build & start tray (non-blocking)
@@ -1129,11 +1195,29 @@ class VPNSwitcherApp:
         # Watch for second-instance launches that want us to come to the front
         self.root.after(400, self._poll_show_flag)
 
-        # Initial status
+        # Boot / sleep guard: if the PC was rebooted or slept since the last
+        # time the app was alive, any prior VPN tunnel is dead — force a clean
+        # state before showing the user a (possibly stale) status.
+        should_clean, reason = session_manager.should_force_disconnect()
+        log = get_logger()
+        log.info(f"session_guard: should_force_disconnect={should_clean} reason='{reason}'")
+        session_manager.touch()
+
         def _init_status():
-            s = self.controller.get_status()
+            if should_clean:
+                self.root.after(0, lambda: self._msg("Restaurando estado tras reinicio…"))
+                try:
+                    self.controller.disconnect_all()
+                except Exception as e:
+                    log.warning(f"session_guard: disconnect_all failed: {e}")
+                self.root.after(0, lambda: self._msg(""))
+            try:
+                s = self.controller.get_status()
+            except Exception:
+                s = NONE
             self._status = s
-            self._refresh_ui()
+            self.root.after(0, self._refresh_ui)
+            self._update_tray_icon()
         threading.Thread(target=_init_status, daemon=True).start()
 
         self.root.mainloop()

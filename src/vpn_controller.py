@@ -1045,8 +1045,17 @@ def _forti_autofill_custom_flow(username: str, password: str, steps: list) -> st
                     password_typed = True
 
             elif step == "mfa":
+                # If we just typed a password, verify it wasn't rejected before
+                # touching the MFA button — the MFA approve button only exists
+                # once the password is accepted. Without this check the loop
+                # would `return "ok"` and the caller would never learn the
+                # password was wrong.
+                if password_typed:
+                    if _check_password_rejected(timeout=10, title_before=title_before):
+                        return "wrong_password"
+                    password_typed = False  # already verified
                 _click_authenticator_button()
-                return "ok"
+                break
 
         if password_typed:
             if _check_password_rejected(timeout=10, title_before=title_before):
