@@ -1373,6 +1373,121 @@ def _gp_invoke_connect_button(win) -> bool:
     return False
 
 
+def _gp_get_login_window(timeout: float = 1.0):
+    """Find the SAML 'GlobalProtect Login' window (class #32770) via UIA.
+
+    PanGPA renders the SAML auth flow inside an embedded WebView2 hosted in
+    this dialog. When BICE's federation returns Microsoft, the WebView2
+    sometimes shows a 'Pick an account' picker — we need the UIA wrapper to
+    walk its descendants and click the configured account.
+    """
+    log = get_logger()
+    try:
+        from pywinauto import Desktop
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                desktop = Desktop(backend="uia")
+                for w in desktop.windows():
+                    try:
+                        if (w.window_text() == GP_LOGIN_TITLE
+                                and w.element_info.class_name == GP_CLASS):
+                            return w
+                    except Exception:
+                        pass
+            except Exception as e:
+                log.debug(f"gp_get_login_window: iteration error: {e}")
+            time.sleep(0.4)
+    except Exception as e:
+        log.warning(f"gp_get_login_window: failed: {e}")
+    return None
+
+
+def _gp_try_click(ctrl, where: str) -> bool:
+    """Invoke() then click_input() on a control. Logs which path worked."""
+    log = get_logger()
+    try:
+        ctrl.invoke()
+        log.info(f"gp_picker: invoke() on {where} succeeded")
+        return True
+    except Exception:
+        pass
+    try:
+        ctrl.click_input()
+        log.info(f"gp_picker: click_input() on {where} succeeded")
+        return True
+    except Exception as e:
+        log.debug(f"gp_picker: click_input() on {where} failed: {e}")
+    return False
+
+
+def _gp_click_account_in_picker(username: str, timeout: float = 15.0) -> bool:
+    """If the SAML login window is showing Microsoft's 'Pick an account'
+    picker, click the row whose text contains `username`.
+
+    Microsoft's picker is rendered inside an embedded WebView2; account rows
+    are exposed to UIA as descendants whose text equals the account email.
+    If a match's own invoke()/click_input() doesn't take, we walk up one or
+    two ancestors — the clickable row is usually a parent container.
+
+    Returns True if a click was issued. Returns False if no picker / no
+    match appears within `timeout`, in which case SAML likely transitioned
+    straight to MFA or the landing page and no action is needed.
+    """
+    log = get_logger()
+    if not username:
+        log.info("gp_picker: no configured gp_username — skipping picker handler")
+        return False
+
+    target = username.strip().lower()
+    log.info(f"gp_picker: watching for account row matching '{target}' "
+             f"(timeout={timeout}s)")
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        try:
+            login_win = _gp_get_login_window(timeout=0.6)
+            if not login_win:
+                time.sleep(0.5)
+                continue
+
+            try:
+                descendants = login_win.descendants()
+            except Exception as e:
+                log.warning(f"gp_picker: descendants() failed: {e}")
+                time.sleep(0.7)
+                continue
+
+            for ctrl in descendants:
+                try:
+                    text = (ctrl.window_text() or "").strip().lower()
+                except Exception:
+                    continue
+                if not text or target not in text:
+                    continue
+                log.info(f"gp_picker: matched element text='{text[:80]}'")
+                if _gp_try_click(ctrl, "match"):
+                    return True
+                # The row is often a clickable ancestor (button/listitem),
+                # while the text node itself is a static. Walk up.
+                try:
+                    parent = ctrl.parent()
+                    if parent and _gp_try_click(parent, "parent"):
+                        return True
+                    grand = parent.parent() if parent else None
+                    if grand and _gp_try_click(grand, "grandparent"):
+                        return True
+                except Exception as e:
+                    log.warning(f"gp_picker: ancestor walk failed: {e}")
+        except Exception as e:
+            log.warning(f"gp_picker: iteration error: {e}")
+        time.sleep(0.8)
+
+    log.info("gp_picker: no matching account row appeared within timeout "
+             "(picker may not be showing — that is normal)")
+    return False
+
+
 class VPNController:
     def __init__(self, config: dict):
         self.config = config
@@ -1710,6 +1825,18 @@ class VPNController:
             _gp_dump_descendants(win)
             _gp_diagnostics()
             return False, "Could not click Connect button in GlobalProtect window."
+
+        # 5b. If the SAML flow shows Microsoft's 'Pick an account' picker, the
+        # auth blocks indefinitely until someone clicks a row. We try to click
+        # the configured gp_username here; if the picker never appears (already
+        # signed in / direct MFA), this is a no-op.
+        gp_user = self.config.get("gp_username", "").strip()
+        if gp_user:
+            try:
+                clicked = _gp_click_account_in_picker(gp_user, timeout=15.0)
+                log.info(f"connect_globalprotect: account picker handler clicked={clicked}")
+            except Exception as e:
+                log.warning(f"connect_globalprotect: account picker handler failed: {e}")
 
         # 6. Poll status. SAML auth happens inside an embedded WebView2 and may
         # require user interaction (account selection, MFA). We wait passively.

@@ -571,16 +571,27 @@ class SettingsDialog(tk.Toplevel):
 
         tk.Label(
             frame,
-            text="Export the diagnostic log so you can send it for support.",
+            text="Export the diagnostic log to send it for support, "
+                 "or clear it before reproducing an issue.",
             bg=T["bg"], fg=T["text_muted"], font=("Segoe UI", 8)
         ).pack(anchor="w", pady=(4, 4))
+
+        log_row = tk.Frame(frame, bg=T["bg"])
+        log_row.pack(anchor="w", pady=(0, 8))
         tk.Button(
-            frame, text="💾  Save log to file…",
+            log_row, text="💾  Save log to file…",
             bg=T["surface"], fg=T["text"], relief=tk.FLAT,
             font=("Segoe UI", 9), padx=14, pady=7,
             command=self._save_log, cursor="hand2",
             activebackground=T["surface_hi"], activeforeground=T["text"],
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(side=tk.LEFT)
+        tk.Button(
+            log_row, text="🗑  Limpiar logs",
+            bg=T["surface"], fg=T["text"], relief=tk.FLAT,
+            font=("Segoe UI", 9), padx=14, pady=7,
+            command=self._clear_log, cursor="hand2",
+            activebackground=T["surface_hi"], activeforeground=T["text"],
+        ).pack(side=tk.LEFT, padx=(8, 0))
 
         # ── About ──────────────────────────────────────────────────────────
         self._section(frame, "About")
@@ -633,6 +644,40 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showinfo("Log saved", f"Saved to:\n{dest}", parent=self)
         except Exception as e:
             messagebox.showerror("Could not save log", f"{e}", parent=self)
+
+    def _clear_log(self):
+        """Truncate the active log file. The logger keeps its open handle —
+        new entries land in the now-empty file without needing a restart."""
+        from logger import LOG_FILE, get_logger
+
+        if not os.path.exists(LOG_FILE):
+            messagebox.showinfo(
+                "Nada que limpiar",
+                f"No hay log todavía en:\n{LOG_FILE}",
+                parent=self,
+            )
+            return
+
+        if not messagebox.askokcancel(
+            "Limpiar logs",
+            "Esto va a borrar todo el contenido del archivo de log.\n"
+            "Útil antes de reproducir un problema para que el log nuevo "
+            "salga limpio.\n\n¿Continuar?",
+            parent=self,
+        ):
+            return
+
+        try:
+            with open(LOG_FILE, "w", encoding="utf-8"):
+                pass
+            get_logger().info("log cleared from Settings → Limpiar logs")
+            messagebox.showinfo(
+                "Log limpio",
+                "El archivo de log fue vaciado.",
+                parent=self,
+            )
+        except Exception as e:
+            messagebox.showerror("No se pudo limpiar el log", f"{e}", parent=self)
 
     def _save(self):
         from config_manager import encrypt_password
