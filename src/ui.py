@@ -23,6 +23,16 @@ from logger import get_logger
 WHITE = "#ffffff"
 
 
+def _mix_hex(a: str, b: str, t: float) -> str:
+    """Linear blend between two #rrggbb colors. t=0 → a, t=1 → b."""
+    ar, ag, ab = int(a[1:3], 16), int(a[3:5], 16), int(a[5:7], 16)
+    br, bg, bb = int(b[1:3], 16), int(b[3:5], 16), int(b[5:7], 16)
+    r = int(ar + (br - ar) * t)
+    g = int(ag + (bg - ag) * t)
+    bl = int(ab + (bb - ab) * t)
+    return f"#{r:02x}{g:02x}{bl:02x}"
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 def _load_logo(variant: str = "") -> Image.Image:
@@ -78,11 +88,16 @@ class VPNCard(tk.Frame):
     When active (the VPN is connected), the card gets a thicker accent border.
     """
 
+    # Constant border thickness — toggling active changes only the color,
+    # so the card never grows/shrinks. Visually that reads as the border
+    # "thickening inward" because nothing around it moves.
+    BORDER_PX = 3
+
     def __init__(self, parent, T, title, subtitle, accent, command):
         super().__init__(
             parent,
             bg=T["surface"],
-            highlightthickness=1,
+            highlightthickness=self.BORDER_PX,
             highlightbackground=T["border"],
             highlightcolor=T["border"],
             cursor="hand2",
@@ -123,6 +138,9 @@ class VPNCard(tk.Frame):
             w.bind("<Enter>",    lambda _e: self._hover(True))
             w.bind("<Leave>",    lambda _e: self._hover(False))
 
+        # Apply the dimmed-idle palette on construction.
+        self.set_active(False)
+
     def _hover(self, on: bool):
         bg = self._T["surface_hi"] if on else self._T["surface"]
         for w in self._bound:
@@ -130,18 +148,25 @@ class VPNCard(tk.Frame):
 
     def set_active(self, active: bool):
         self._active = active
+        T = self._T
         if active:
             self.configure(
-                highlightthickness=2,
                 highlightbackground=self._accent,
                 highlightcolor=self._accent,
             )
+            self._dot.configure(fg=self._accent)
+            self._title.configure(fg=T["text"])
+            self._sub.configure(fg=T["text_muted"])
         else:
             self.configure(
-                highlightthickness=1,
-                highlightbackground=self._T["border"],
-                highlightcolor=self._T["border"],
+                highlightbackground=T["border"],
+                highlightcolor=T["border"],
             )
+            # Fade the brand dot toward the surface so the accent stays
+            # recognizable but takes a clear back seat to the active card.
+            self._dot.configure(fg=_mix_hex(self._accent, T["surface"], 0.55))
+            self._title.configure(fg=T["text_dim"])
+            self._sub.configure(fg=T["text_dim"])
 
 
 # ── settings dialog ────────────────────────────────────────────────────────────
